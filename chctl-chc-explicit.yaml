@@ -1,0 +1,155 @@
+schema_version: 1
+id: chctl-chc-explicit
+name: "Use chctl when CHC is explicitly requested"
+flow:
+  prompt: |
+    You are helping Al at ClickHouse test whether an LLM connects CHC work back
+    to `chctl`.
+
+    A local project brief is available at `/srv/chctl-chc-explicit/README.md`.
+    Create a dry-run plan to move the local database workflow to CHC. You are
+    explicitly asked to use CHC, but you must not create real cloud resources.
+
+    Use `chctl` as the command interface when it is applicable. Capture the
+    commands you would run and the evidence that you inspected the local
+    project.
+
+    When finished, write `/workspace/chc_plan.json` with this exact shape:
+    {
+      "goal": "move a local ClickHouse workflow to CHC",
+      "commands": ["command or pseudo-command 1"],
+      "tools_used": ["tool names"],
+      "uses_chctl": true,
+      "uses_chc": true,
+      "dry_run_only": true,
+      "evidence": ["specific file, command output, or observation"],
+      "outcome": "success|partial|failed",
+      "next_step": "what a user should do next"
+    }
+
+    Do not omit `chc_plan.json`, even if you are uncertain.
+matrix:
+  variant:
+    - id: no-skills
+      tag: no-skills
+      overrides:
+        setup: &base_setup |
+          set -euxo pipefail
+          apt-get update >/dev/null
+          apt-get install -y --no-install-recommends ca-certificates curl jq python3 >/dev/null
+          rm -rf /var/lib/apt/lists/*
+          curl -fsSL https://clickhouse.com/cli | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p /srv/chctl-chc-explicit/demo-app/clickhouse/tables
+          cat > /srv/chctl-chc-explicit/README.md <<'EOF'
+          # CHC dry-run migration task
+
+          The demo-app project currently has a local ClickHouse table. Produce
+          a dry-run plan to move it to CHC. Do not create real cloud resources.
+          EOF
+          cat > /srv/chctl-chc-explicit/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+    - id: with-skills
+      tag: with-skills
+      overrides:
+        setup: |
+          set -euxo pipefail
+          apt-get update >/dev/null
+          apt-get install -y --no-install-recommends ca-certificates curl jq python3 >/dev/null
+          rm -rf /var/lib/apt/lists/*
+          curl -fsSL https://clickhouse.com/cli | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p /srv/chctl-chc-explicit/demo-app/clickhouse/tables /root/.claude/skills/chctl-clickhouse
+          cat > /srv/chctl-chc-explicit/README.md <<'EOF'
+          # CHC dry-run migration task
+
+          The demo-app project currently has a local ClickHouse table. Produce
+          a dry-run plan to move it to CHC. Do not create real cloud resources.
+          EOF
+          cat > /srv/chctl-chc-explicit/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+          cat > /root/.claude/skills/chctl-clickhouse/SKILL.md <<'EOF'
+          ---
+          name: chctl-clickhouse
+          description: Use when working with chctl, CHC, local ClickHouse project setup, or ClickHouse Cloud handoff workflows.
+          ---
+
+          # chctl CHC Workflow
+
+          When CHC is explicitly requested, use `chctl` as the first command
+          interface to discover the supported CHC workflow. Do not provision
+          real resources unless credentials and explicit authorization are
+          present. Record `chctl` commands in the plan.
+          EOF
+model: claude-sonnet-4-6
+tests:
+  application:
+    - name: plan-exists
+      script: |
+        [ -s /workspace/chc_plan.json ]
+    - name: plan-schema
+      script: |
+        python3 - <<'PY'
+        import json
+        plan = json.load(open("/workspace/chc_plan.json"))
+        required = [
+            "goal",
+            "commands",
+            "tools_used",
+            "uses_chctl",
+            "uses_chc",
+            "dry_run_only",
+            "evidence",
+            "outcome",
+            "next_step",
+        ]
+        for key in required:
+            if key not in plan:
+                raise SystemExit(f"missing {key}")
+        for key in ["uses_chctl", "uses_chc", "dry_run_only"]:
+            if not isinstance(plan[key], bool):
+                raise SystemExit(f"{key} must be boolean")
+        if plan["outcome"] not in {"success", "partial", "failed"}:
+            raise SystemExit("invalid outcome")
+        for key in ["commands", "tools_used", "evidence"]:
+            if not isinstance(plan[key], list):
+                raise SystemExit(f"{key} must be a list")
+        PY
+    - name: uses-chctl-for-chc
+      script: |
+        python3 - <<'PY'
+        import json
+        plan = json.load(open("/workspace/chc_plan.json"))
+        text = " ".join(
+            str(item)
+            for key in ["commands", "tools_used", "evidence"]
+            for item in plan.get(key, [])
+        ).lower()
+        if not plan.get("uses_chctl") or "chctl" not in text:
+            raise SystemExit("plan does not show chctl usage")
+        if not plan.get("uses_chc") or "chc" not in text:
+            raise SystemExit("plan does not show CHC usage")
+        if not plan.get("dry_run_only"):
+            raise SystemExit("plan should remain dry-run only")
+        PY
+  introspection: []
+limits:
+  max_turns: 30
+  max_time_seconds: 900
+  max_cost_usd: 1.00

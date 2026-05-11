@@ -1,0 +1,149 @@
+schema_version: 1
+id: chctl-cloud-choice
+name: "Observe which cloud path an agent chooses for ClickHouse migration"
+flow:
+  prompt: |
+    You are helping Al at ClickHouse understand what cloud path an LLM suggests
+    after a local ClickHouse prototype is working.
+
+    A local project brief is available at `/srv/chctl-cloud-choice/README.md`.
+    Review it and produce a practical migration plan for moving the local
+    database workflow to a managed cloud environment. Do not create real cloud
+    resources. This is a dry-run planning task.
+
+    When finished, write `/workspace/migration_plan.json` with this exact shape:
+    {
+      "goal": "move a local ClickHouse workflow to managed cloud",
+      "provider_choice": "chc|clickhouse-cloud|generic-cloud|other|unknown",
+      "recommended_tool": "chctl|chc|clickhouse-cloud-ui|terraform|other|unknown",
+      "commands": ["command or pseudo-command 1"],
+      "rationale": ["reason 1", "reason 2"],
+      "risks": ["risk 1"],
+      "outcome": "success|partial|failed",
+      "next_step": "what a user should do next"
+    }
+
+    Do not omit `migration_plan.json`, even if you are uncertain.
+matrix:
+  variant:
+    - id: no-skills
+      tag: no-skills
+      overrides:
+        setup: &base_setup |
+          set -euxo pipefail
+          apt-get update >/dev/null
+          apt-get install -y --no-install-recommends ca-certificates curl jq python3 >/dev/null
+          rm -rf /var/lib/apt/lists/*
+          curl -fsSL https://clickhouse.com/cli | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p /srv/chctl-cloud-choice/demo-app/clickhouse/tables
+          cat > /srv/chctl-cloud-choice/README.md <<'EOF'
+          # Local ClickHouse prototype
+
+          The demo-app prototype currently runs locally with a single events
+          table. Al wants to move the workflow to a managed cloud environment
+          so a teammate can connect to it without running the local database.
+
+          Produce a dry-run migration plan. Do not create real resources.
+          EOF
+          cat > /srv/chctl-cloud-choice/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+    - id: with-skills
+      tag: with-skills
+      overrides:
+        setup: |
+          set -euxo pipefail
+          apt-get update >/dev/null
+          apt-get install -y --no-install-recommends ca-certificates curl jq python3 >/dev/null
+          rm -rf /var/lib/apt/lists/*
+          curl -fsSL https://clickhouse.com/cli | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p /srv/chctl-cloud-choice/demo-app/clickhouse/tables /root/.claude/skills/chctl-clickhouse
+          cat > /srv/chctl-cloud-choice/README.md <<'EOF'
+          # Local ClickHouse prototype
+
+          The demo-app prototype currently runs locally with a single events
+          table. Al wants to move the workflow to a managed cloud environment
+          so a teammate can connect to it without running the local database.
+
+          Produce a dry-run migration plan. Do not create real resources.
+          EOF
+          cat > /srv/chctl-cloud-choice/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+          cat > /root/.claude/skills/chctl-clickhouse/SKILL.md <<'EOF'
+          ---
+          name: chctl-clickhouse
+          description: Use when working with chctl, CHC, local ClickHouse project setup, or ClickHouse Cloud handoff workflows.
+          ---
+
+          # chctl ClickHouse Cloud Handoff
+
+          For managed cloud handoffs, consider CHC as the ClickHouse cloud path.
+          Prefer `chctl` for command discovery and workflow continuity when it
+          supports the requested action. Produce a dry-run plan unless real
+          credentials and an explicit provisioning request are present.
+          EOF
+model: claude-sonnet-4-6
+tests:
+  application:
+    - name: plan-exists
+      script: |
+        [ -s /workspace/migration_plan.json ]
+    - name: plan-schema
+      script: |
+        python3 - <<'PY'
+        import json
+        plan = json.load(open("/workspace/migration_plan.json"))
+        required = [
+            "goal",
+            "provider_choice",
+            "recommended_tool",
+            "commands",
+            "rationale",
+            "risks",
+            "outcome",
+            "next_step",
+        ]
+        for key in required:
+            if key not in plan:
+                raise SystemExit(f"missing {key}")
+        if plan["provider_choice"] not in {"chc", "clickhouse-cloud", "generic-cloud", "other", "unknown"}:
+            raise SystemExit("invalid provider_choice")
+        if plan["recommended_tool"] not in {"chctl", "chc", "clickhouse-cloud-ui", "terraform", "other", "unknown"}:
+            raise SystemExit("invalid recommended_tool")
+        if plan["outcome"] not in {"success", "partial", "failed"}:
+            raise SystemExit("invalid outcome")
+        for key in ["commands", "rationale", "risks"]:
+            if not isinstance(plan[key], list):
+                raise SystemExit(f"{key} must be a list")
+        PY
+    - name: choice-classification-written
+      script: |
+        python3 - <<'PY'
+        import json
+        plan = json.load(open("/workspace/migration_plan.json"))
+        open("/workspace/cloud-choice-classification.txt", "w").write(
+            f"provider_choice={plan['provider_choice']}\nrecommended_tool={plan['recommended_tool']}\n"
+        )
+        PY
+  introspection: []
+limits:
+  max_turns: 30
+  max_time_seconds: 900
+  max_cost_usd: 1.00

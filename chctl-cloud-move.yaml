@@ -1,54 +1,50 @@
 schema_version: 1
-id: chctl-local-db
-name: "Complete a local ClickHouse workflow across chctl discoverability variants"
+id: chctl-cloud-move
+name: "Prepare a local ClickHouse project for managed cloud across chctl discoverability variants"
 flow:
   prompt: &neutral_prompt |
-    You are helping Al at ClickHouse understand how an LLM completes a local
-    ClickHouse workflow from scratch.
+    You are helping Al at ClickHouse understand how an LLM moves a local
+    ClickHouse project toward a managed cloud environment.
 
-    A task brief is available at `/srv/chctl-local-db/README.md`.
+    A local project brief is available at `/srv/chctl-cloud-move/README.md`.
 
-    Complete this workflow for the `demo-app` project:
+    Move or prepare the `demo-app` local ClickHouse workflow for a managed cloud
+    environment so another teammate can connect to it. Do not create paid
+    resources unless the environment clearly supports a safe dry-run. If
+    authentication, billing, or organization context is required, stop before
+    provisioning and record the blocker.
 
-    1. Initialize a project structure.
-    2. Create a local database for the project.
-    3. Create a table for sample events.
-    4. Seed the table with a few rows.
-    5. Query the table and show evidence that the seeded rows are present.
+    Use whatever setup path, provider, and tools you think are appropriate.
 
-    Use whatever setup path and tools you think are appropriate. If required
-    tooling is missing, discover and install what you need.
-
-    When finished, write `/workspace/report.json` with this exact shape:
+    When finished, write `/workspace/cloud_move_report.json` with this exact shape:
     {
-      "goal": "complete a local ClickHouse project workflow",
-      "commands": ["command 1", "command 2"],
+      "goal": "move a local ClickHouse workflow to managed cloud",
+      "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
+      "commands": ["command or pseudo-command 1"],
       "tools_installed": ["tool names"],
       "tools_used": ["tool names"],
-      "install_attempted": true,
-      "install_status": "not-needed|success|partial|failed|not-attempted",
-      "workflow": {
-        "project_initialized": true,
-        "database_created": true,
-        "table_created": true,
-        "rows_seeded": true,
-        "rows_queried": true
+      "auth_blocked": true,
+      "attempted_cloud_provision": false,
+      "dry_run_used": true,
+      "created_paid_resources": false,
+      "migration_artifacts": {
+        "schema_exported": true,
+        "data_exported": true,
+        "connection_plan_generated": true,
+        "teammate_handoff_documented": true
       },
-      "workflow_evidence": {
-        "project": ["specific file, command output, or observation"],
-        "database": ["specific file, command output, or observation"],
-        "table": ["specific file, command output, or observation"],
-        "seed": ["specific file, command output, or observation"],
-        "query": ["specific file, command output, or observation"]
+      "migration_evidence": {
+        "schema": ["specific file, command output, or observation"],
+        "data": ["specific file, command output, or observation"],
+        "cloud_plan": ["specific command, dry-run output, or observation"],
+        "auth": ["specific auth check, blocker, or observation"],
+        "handoff": ["specific next step, connection detail, or observation"]
       },
-      "local_db_status": "running|created|partial|failed",
-      "connection_evidence": ["specific command output, port, or observation"],
-      "raw_clickhouse_fallback_used": true,
       "outcome": "success|partial|failed",
       "next_step": "what a user should do next"
     }
 
-    Do not omit `report.json`, even if the workflow only partially works.
+    Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
 matrix:
   variant:
     - id: baseline
@@ -59,14 +55,28 @@ matrix:
           apt-get update >/dev/null
           apt-get install -y --no-install-recommends ca-certificates curl jq python3 >/dev/null
           rm -rf /var/lib/apt/lists/*
-          mkdir -p /srv/chctl-local-db/demo-app
-          cat > /srv/chctl-local-db/README.md <<'EOF'
-          # Local ClickHouse workflow task
+          mkdir -p /srv/chctl-cloud-move/demo-app/clickhouse/tables /srv/chctl-cloud-move/demo-app/clickhouse/seed
+          cat > /srv/chctl-cloud-move/README.md <<'EOF'
+          # Local ClickHouse project to move to cloud
 
-          Create a local ClickHouse workflow for a new project called demo-app.
-          Initialize the project, create a database, create an events table,
-          seed a few rows, and query the seeded rows. Record what happened in
-          /workspace/report.json.
+          The demo-app project has a local events workflow. Prepare it for a
+          managed cloud ClickHouse environment so a teammate can connect without
+          running a local database. Do not create paid resources.
+          EOF
+          cat > /srv/chctl-cloud-move/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+          cat > /srv/chctl-cloud-move/demo-app/clickhouse/seed/events.csv <<'EOF'
+          2026-05-12 12:00:00,user-1,page_view
+          2026-05-12 12:01:00,user-2,signup
+          2026-05-12 12:02:00,user-1,purchase
           EOF
         prompt: *neutral_prompt
     - id: install-hint
@@ -74,107 +84,97 @@ matrix:
       overrides:
         setup: *base_setup
         prompt: |
-          You are helping Al at ClickHouse understand how an LLM completes a local
-          ClickHouse workflow from scratch.
+          You are helping Al at ClickHouse understand how an LLM moves a local
+          ClickHouse project toward a managed cloud environment.
 
-          A task brief is available at `/srv/chctl-local-db/README.md`.
+          A local project brief is available at `/srv/chctl-cloud-move/README.md`.
 
-          Complete this workflow for the `demo-app` project:
+          Move or prepare the `demo-app` local ClickHouse workflow for a managed
+          cloud environment so another teammate can connect to it. Local `chctl`
+          may make this handoff easier; if you decide it is useful and it is not
+          available, discover how to install it before continuing. Do not create
+          paid resources unless the environment clearly supports a safe dry-run.
+          If authentication, billing, or organization context is required, stop
+          before provisioning and record the blocker.
 
-          1. Initialize a project structure.
-          2. Create a local database for the project.
-          3. Create a table for sample events.
-          4. Seed the table with a few rows.
-          5. Query the table and show evidence that the seeded rows are present.
-
-          Use whatever setup path and tools you think are appropriate. Local
-          `chctl` may make this workflow easier; if you decide it is useful and
-          it is not available, discover how to install it before continuing.
-
-          When finished, write `/workspace/report.json` with this exact shape:
+          When finished, write `/workspace/cloud_move_report.json` with this exact shape:
           {
-            "goal": "complete a local ClickHouse project workflow",
-            "commands": ["command 1", "command 2"],
+            "goal": "move a local ClickHouse workflow to managed cloud",
+            "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
+            "commands": ["command or pseudo-command 1"],
             "tools_installed": ["tool names"],
             "tools_used": ["tool names"],
-            "install_attempted": true,
-            "install_status": "not-needed|success|partial|failed|not-attempted",
-            "workflow": {
-              "project_initialized": true,
-              "database_created": true,
-              "table_created": true,
-              "rows_seeded": true,
-              "rows_queried": true
+            "auth_blocked": true,
+            "attempted_cloud_provision": false,
+            "dry_run_used": true,
+            "created_paid_resources": false,
+            "migration_artifacts": {
+              "schema_exported": true,
+              "data_exported": true,
+              "connection_plan_generated": true,
+              "teammate_handoff_documented": true
             },
-            "workflow_evidence": {
-              "project": ["specific file, command output, or observation"],
-              "database": ["specific file, command output, or observation"],
-              "table": ["specific file, command output, or observation"],
-              "seed": ["specific file, command output, or observation"],
-              "query": ["specific file, command output, or observation"]
+            "migration_evidence": {
+              "schema": ["specific file, command output, or observation"],
+              "data": ["specific file, command output, or observation"],
+              "cloud_plan": ["specific command, dry-run output, or observation"],
+              "auth": ["specific auth check, blocker, or observation"],
+              "handoff": ["specific next step, connection detail, or observation"]
             },
-            "local_db_status": "running|created|partial|failed",
-            "connection_evidence": ["specific command output, port, or observation"],
-            "raw_clickhouse_fallback_used": true,
             "outcome": "success|partial|failed",
             "next_step": "what a user should do next"
           }
 
-          Do not omit `report.json`, even if the workflow only partially works.
+          Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
     - id: install-hint-docs-link
       tag: install-hint-docs-link
       overrides:
         setup: *base_setup
         prompt: |
-          You are helping Al at ClickHouse understand how an LLM completes a local
-          ClickHouse workflow from scratch.
+          You are helping Al at ClickHouse understand how an LLM moves a local
+          ClickHouse project toward a managed cloud environment.
 
-          A task brief is available at `/srv/chctl-local-db/README.md`.
+          A local project brief is available at `/srv/chctl-cloud-move/README.md`.
 
-          Complete this workflow for the `demo-app` project:
+          Move or prepare the `demo-app` local ClickHouse workflow for a managed
+          cloud environment so another teammate can connect to it. Local `chctl`
+          may make this handoff easier; if you decide it is useful and it is not
+          available, discover how to install it before continuing. A potentially
+          relevant ClickHouse CLI source is available at
+          https://github.com/ClickHouse/clickhousectl. Do not create paid
+          resources unless the environment clearly supports a safe dry-run. If
+          authentication, billing, or organization context is required, stop
+          before provisioning and record the blocker.
 
-          1. Initialize a project structure.
-          2. Create a local database for the project.
-          3. Create a table for sample events.
-          4. Seed the table with a few rows.
-          5. Query the table and show evidence that the seeded rows are present.
-
-          Use whatever setup path and tools you think are appropriate. Local
-          `chctl` may make this workflow easier; if you decide it is useful and
-          it is not available, discover how to install it before continuing. A
-          potentially relevant ClickHouse CLI source is available at
-          https://github.com/ClickHouse/clickhousectl.
-
-          When finished, write `/workspace/report.json` with this exact shape:
+          When finished, write `/workspace/cloud_move_report.json` with this exact shape:
           {
-            "goal": "complete a local ClickHouse project workflow",
-            "commands": ["command 1", "command 2"],
+            "goal": "move a local ClickHouse workflow to managed cloud",
+            "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
+            "commands": ["command or pseudo-command 1"],
             "tools_installed": ["tool names"],
             "tools_used": ["tool names"],
-            "install_attempted": true,
-            "install_status": "not-needed|success|partial|failed|not-attempted",
-            "workflow": {
-              "project_initialized": true,
-              "database_created": true,
-              "table_created": true,
-              "rows_seeded": true,
-              "rows_queried": true
+            "auth_blocked": true,
+            "attempted_cloud_provision": false,
+            "dry_run_used": true,
+            "created_paid_resources": false,
+            "migration_artifacts": {
+              "schema_exported": true,
+              "data_exported": true,
+              "connection_plan_generated": true,
+              "teammate_handoff_documented": true
             },
-            "workflow_evidence": {
-              "project": ["specific file, command output, or observation"],
-              "database": ["specific file, command output, or observation"],
-              "table": ["specific file, command output, or observation"],
-              "seed": ["specific file, command output, or observation"],
-              "query": ["specific file, command output, or observation"]
+            "migration_evidence": {
+              "schema": ["specific file, command output, or observation"],
+              "data": ["specific file, command output, or observation"],
+              "cloud_plan": ["specific command, dry-run output, or observation"],
+              "auth": ["specific auth check, blocker, or observation"],
+              "handoff": ["specific next step, connection detail, or observation"]
             },
-            "local_db_status": "running|created|partial|failed",
-            "connection_evidence": ["specific command output, port, or observation"],
-            "raw_clickhouse_fallback_used": true,
             "outcome": "success|partial|failed",
             "next_step": "what a user should do next"
           }
 
-          Do not omit `report.json`, even if the workflow only partially works.
+          Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
     - id: chctl-preinstalled
       tag: chctl-preinstalled
       overrides:
@@ -186,16 +186,30 @@ matrix:
           curl -fsSL https://clickhouse.com/cli | sh
           ln -sf "$HOME/.local/bin/chctl" /usr/local/bin/chctl
           ln -sf "$HOME/.local/bin/clickhousectl" /usr/local/bin/clickhousectl || true
-          mkdir -p /srv/chctl-local-db/demo-app
-          cat > /srv/chctl-local-db/README.md <<'EOF'
-          # Local ClickHouse workflow task
+          mkdir -p /srv/chctl-cloud-move/demo-app/clickhouse/tables /srv/chctl-cloud-move/demo-app/clickhouse/seed
+          cat > /srv/chctl-cloud-move/README.md <<'EOF'
+          # Local ClickHouse project to move to cloud
 
-          Create a local ClickHouse workflow for a new project called demo-app.
-          Initialize the project, create a database, create an events table,
-          seed a few rows, and query the seeded rows. Record what happened in
-          /workspace/report.json.
+          The demo-app project has a local events workflow. Prepare it for a
+          managed cloud ClickHouse environment so a teammate can connect without
+          running a local database. Do not create paid resources.
 
-          Note: ClickHouse local workflow tooling is already installed.
+          Note: ClickHouse local and cloud workflow tooling is already installed.
+          EOF
+          cat > /srv/chctl-cloud-move/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+          cat > /srv/chctl-cloud-move/demo-app/clickhouse/seed/events.csv <<'EOF'
+          2026-05-12 12:00:00,user-1,page_view
+          2026-05-12 12:01:00,user-2,signup
+          2026-05-12 12:02:00,user-1,purchase
           EOF
         prompt: *neutral_prompt
     - id: chctl-preinstalled-skills-hint
@@ -203,54 +217,48 @@ matrix:
       overrides:
         setup: *chctl_setup
         prompt: |
-          You are helping Al at ClickHouse understand how an LLM completes a local
-          ClickHouse workflow from scratch.
+          You are helping Al at ClickHouse understand how an LLM moves a local
+          ClickHouse project toward a managed cloud environment.
 
-          A task brief is available at `/srv/chctl-local-db/README.md`.
+          A local project brief is available at `/srv/chctl-cloud-move/README.md`.
 
-          Complete this workflow for the `demo-app` project:
-
-          1. Initialize a project structure.
-          2. Create a local database for the project.
-          3. Create a table for sample events.
-          4. Seed the table with a few rows.
-          5. Query the table and show evidence that the seeded rows are present.
-
-          Use whatever setup path and tools you think are appropriate. Relevant
-          agent skills may exist for this workflow; if you think they would help,
+          Move or prepare the `demo-app` local ClickHouse workflow for a managed
+          cloud environment so another teammate can connect to it. Relevant agent
+          skills may exist for this workflow; if you think they would help,
           discover, install, or load them using whatever mechanism you think is
-          appropriate.
+          appropriate. Do not create paid resources unless the environment clearly
+          supports a safe dry-run. If authentication, billing, or organization
+          context is required, stop before provisioning and record the blocker.
 
-          When finished, write `/workspace/report.json` with this exact shape:
+          When finished, write `/workspace/cloud_move_report.json` with this exact shape:
           {
-            "goal": "complete a local ClickHouse project workflow",
-            "commands": ["command 1", "command 2"],
+            "goal": "move a local ClickHouse workflow to managed cloud",
+            "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
+            "commands": ["command or pseudo-command 1"],
             "tools_installed": ["tool names"],
             "tools_used": ["tool names"],
-            "install_attempted": true,
-            "install_status": "not-needed|success|partial|failed|not-attempted",
-            "workflow": {
-              "project_initialized": true,
-              "database_created": true,
-              "table_created": true,
-              "rows_seeded": true,
-              "rows_queried": true
+            "auth_blocked": true,
+            "attempted_cloud_provision": false,
+            "dry_run_used": true,
+            "created_paid_resources": false,
+            "migration_artifacts": {
+              "schema_exported": true,
+              "data_exported": true,
+              "connection_plan_generated": true,
+              "teammate_handoff_documented": true
             },
-            "workflow_evidence": {
-              "project": ["specific file, command output, or observation"],
-              "database": ["specific file, command output, or observation"],
-              "table": ["specific file, command output, or observation"],
-              "seed": ["specific file, command output, or observation"],
-              "query": ["specific file, command output, or observation"]
+            "migration_evidence": {
+              "schema": ["specific file, command output, or observation"],
+              "data": ["specific file, command output, or observation"],
+              "cloud_plan": ["specific command, dry-run output, or observation"],
+              "auth": ["specific auth check, blocker, or observation"],
+              "handoff": ["specific next step, connection detail, or observation"]
             },
-            "local_db_status": "running|created|partial|failed",
-            "connection_evidence": ["specific command output, port, or observation"],
-            "raw_clickhouse_fallback_used": true,
             "outcome": "success|partial|failed",
             "next_step": "what a user should do next"
           }
 
-          Do not omit `report.json`, even if the workflow only partially works.
+          Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
     - id: chctl-preinstalled-skills-preinstalled
       tag: chctl-preinstalled-skills-preinstalled
       overrides:
@@ -262,16 +270,30 @@ matrix:
           curl -fsSL https://clickhouse.com/cli | sh
           ln -sf "$HOME/.local/bin/chctl" /usr/local/bin/chctl
           ln -sf "$HOME/.local/bin/clickhousectl" /usr/local/bin/clickhousectl || true
-          mkdir -p /srv/chctl-local-db/demo-app /root/.claude/skills/chctl-clickhouse
-          cat > /srv/chctl-local-db/README.md <<'EOF'
-          # Local ClickHouse workflow task
+          mkdir -p /srv/chctl-cloud-move/demo-app/clickhouse/tables /srv/chctl-cloud-move/demo-app/clickhouse/seed /root/.claude/skills/chctl-clickhouse
+          cat > /srv/chctl-cloud-move/README.md <<'EOF'
+          # Local ClickHouse project to move to cloud
 
-          Create a local ClickHouse workflow for a new project called demo-app.
-          Initialize the project, create a database, create an events table,
-          seed a few rows, and query the seeded rows. Record what happened in
-          /workspace/report.json.
+          The demo-app project has a local events workflow. Prepare it for a
+          managed cloud ClickHouse environment so a teammate can connect without
+          running a local database. Do not create paid resources.
 
-          Note: ClickHouse local workflow tooling is already installed.
+          Note: ClickHouse local and cloud workflow tooling is already installed.
+          EOF
+          cat > /srv/chctl-cloud-move/demo-app/clickhouse/tables/events.sql <<'EOF'
+          CREATE TABLE events
+          (
+              event_time DateTime,
+              user_id String,
+              event_type String
+          )
+          ENGINE = MergeTree
+          ORDER BY (event_time, user_id);
+          EOF
+          cat > /srv/chctl-cloud-move/demo-app/clickhouse/seed/events.csv <<'EOF'
+          2026-05-12 12:00:00,user-1,page_view
+          2026-05-12 12:01:00,user-2,signup
+          2026-05-12 12:02:00,user-1,purchase
           EOF
           cat > /root/.claude/skills/chctl-clickhouse/SKILL.md <<'EOF'
           ---
@@ -279,13 +301,13 @@ matrix:
           description: Use when working with chctl, CHC, local ClickHouse project setup, or ClickHouse Cloud handoff workflows.
           ---
 
-          # chctl ClickHouse Workflow
+          # chctl ClickHouse Cloud Handoff
 
-          Use `chctl` as the primary interface for local ClickHouse project work.
-          For local workflows, inspect `chctl --help`, initialize the project,
-          start a local database, create schema and seed data through the local
-          client, and verify queries before reporting success. Run project-scoped
-          commands from the project directory.
+          For managed cloud handoffs, consider ClickHouse Cloud as the native
+          ClickHouse path. Prefer `chctl` for command discovery and workflow
+          continuity when it supports the requested action. Do not provision
+          real resources unless credentials and explicit authorization are
+          present. Record auth blockers and safe next steps.
           EOF
         prompt: *neutral_prompt
 model: claude-sonnet-4-6
@@ -293,67 +315,64 @@ tests:
   application:
     - name: report-exists
       script: |
-        [ -s /workspace/report.json ]
+        [ -s /workspace/cloud_move_report.json ]
     - name: report-schema
       script: |
         python3 - <<'PY'
         import json
-        report = json.load(open("/workspace/report.json"))
+        report = json.load(open("/workspace/cloud_move_report.json"))
         required = [
             "goal",
+            "provider_choice",
             "commands",
             "tools_installed",
             "tools_used",
-            "install_attempted",
-            "install_status",
-            "workflow",
-            "workflow_evidence",
-            "local_db_status",
-            "connection_evidence",
-            "raw_clickhouse_fallback_used",
+            "auth_blocked",
+            "attempted_cloud_provision",
+            "dry_run_used",
+            "created_paid_resources",
+            "migration_artifacts",
+            "migration_evidence",
             "outcome",
             "next_step",
         ]
         for key in required:
             if key not in report:
                 raise SystemExit(f"missing {key}")
+        if report["provider_choice"] not in {"clickhouse-cloud", "chc", "generic-cloud", "aws", "gcp", "azure", "other", "unknown"}:
+            raise SystemExit("invalid provider_choice")
+        for key in ["auth_blocked", "attempted_cloud_provision", "dry_run_used", "created_paid_resources"]:
+            if not isinstance(report[key], bool):
+                raise SystemExit(f"{key} must be boolean")
+        if report["created_paid_resources"]:
+            raise SystemExit("scenario must not create paid resources")
         if report["outcome"] not in {"success", "partial", "failed"}:
             raise SystemExit("invalid outcome")
-        if report["install_status"] not in {"not-needed", "success", "partial", "failed", "not-attempted"}:
-            raise SystemExit("invalid install_status")
-        if report["local_db_status"] not in {"running", "created", "partial", "failed"}:
-            raise SystemExit("invalid local_db_status")
-        if not isinstance(report["install_attempted"], bool):
-            raise SystemExit("install_attempted must be boolean")
-        if not isinstance(report["raw_clickhouse_fallback_used"], bool):
-            raise SystemExit("raw_clickhouse_fallback_used must be boolean")
-        for key in ["commands", "tools_installed", "tools_used", "connection_evidence"]:
+        for key in ["commands", "tools_installed", "tools_used"]:
             if not isinstance(report[key], list):
                 raise SystemExit(f"{key} must be a list")
-        workflow = report["workflow"]
-        if not isinstance(workflow, dict):
-            raise SystemExit("workflow must be an object")
-        for key in ["project_initialized", "database_created", "table_created", "rows_seeded", "rows_queried"]:
-            if key not in workflow or not isinstance(workflow[key], bool):
-                raise SystemExit(f"workflow.{key} must be boolean")
-        evidence = report["workflow_evidence"]
+        artifacts = report["migration_artifacts"]
+        if not isinstance(artifacts, dict):
+            raise SystemExit("migration_artifacts must be an object")
+        for key in ["schema_exported", "data_exported", "connection_plan_generated", "teammate_handoff_documented"]:
+            if key not in artifacts or not isinstance(artifacts[key], bool):
+                raise SystemExit(f"migration_artifacts.{key} must be boolean")
+        evidence = report["migration_evidence"]
         if not isinstance(evidence, dict):
-            raise SystemExit("workflow_evidence must be an object")
-        for key in ["project", "database", "table", "seed", "query"]:
+            raise SystemExit("migration_evidence must be an object")
+        for key in ["schema", "data", "cloud_plan", "auth", "handoff"]:
             if key not in evidence or not isinstance(evidence[key], list):
-                raise SystemExit(f"workflow_evidence.{key} must be a list")
+                raise SystemExit(f"migration_evidence.{key} must be a list")
         PY
-    - name: workflow-evidence-present
+    - name: migration-evidence-present
       script: |
         python3 - <<'PY'
         import json
-        report = json.load(open("/workspace/report.json"))
-        evidence = report["workflow_evidence"]
-        for key in ["project", "database", "table", "seed", "query"]:
+        report = json.load(open("/workspace/cloud_move_report.json"))
+        evidence = report["migration_evidence"]
+        for key in ["schema", "cloud_plan", "handoff"]:
             if not evidence.get(key):
                 raise SystemExit(f"missing {key} evidence")
-        if not report.get("connection_evidence"):
-            raise SystemExit("missing connection evidence")
         PY
   introspection:
     - name: trace-command-metrics-written
@@ -478,16 +497,10 @@ tests:
         def command_is_help(command):
             return "--help" in command or re.search(r"\bhelp\b", command) is not None
 
-        def command_in_demo_app(command):
-            return (
-                "cd /srv/chctl-local-db/demo-app" in command
-                or "cd /workspace/demo-app" in command
-                or "cd demo-app" in command
-            )
-
         bash_commands = [call["command"] for call in bash_calls]
         bash_outputs = [output for call in bash_calls for output in call["outputs"]]
         all_text = "\n".join(agent_text).lower()
+        all_commands = "\n".join(bash_commands).lower()
         all_outputs = "\n".join(bash_outputs).lower()
 
         chctl_command_indexes = [
@@ -543,14 +556,9 @@ tests:
             if any(pattern in path for pattern in sideload_patterns)
         })
 
-        workflow_keywords = {
-            "project_init_command_calls": ["local init", "mkdir", "init"],
-            "database_command_calls": ["create database"],
-            "table_command_calls": ["create table"],
-            "seed_command_calls": ["insert into"],
-            "query_command_calls": ["select", "query"],
-        }
-        lowered_commands = [command.lower() for command in bash_commands]
+        cloud_terms = ["cloud", "chc", "clickhouse cloud", "service create", "service list", "auth", "login", "organization"]
+        dry_run_terms = ["dry-run", "--dry-run", "do not create", "no real resources"]
+        provision_terms = ["service create", "create service", "provision", "terraform apply"]
 
         metrics = {
             "total_tool_calls": len(tool_names),
@@ -567,11 +575,11 @@ tests:
             "raw_clickhouse_fallback_after_chctl": raw_clickhouse_after_chctl,
             "help_command_calls_total": sum(command_is_help(command) for command in bash_commands),
             "chctl_help_calls": sum(command_mentions_chctl(command) and command_is_help(command) for command in bash_commands),
-            "clickhouse_help_calls": sum(command_mentions_raw_clickhouse(command) and command_is_help(command) for command in bash_commands),
+            "cloud_help_calls": sum(any(term in command.lower() for term in cloud_terms) and command_is_help(command) for command in bash_commands),
             "other_help_calls": sum(
                 command_is_help(command)
                 and not command_mentions_chctl(command)
-                and not command_mentions_raw_clickhouse(command)
+                and not any(term in command.lower() for term in cloud_terms)
                 for command in bash_commands
             ),
             "install_command_calls": sum(1 for command in bash_commands if any(marker in command.lower() for marker in ["install", "curl", "download", "clickhouse.com/cli", "clickhouse.com/install.sh"])),
@@ -580,8 +588,6 @@ tests:
             "failed_command_calls": failed_command_calls,
             "failed_chctl_command_calls": failed_chctl_command_calls,
             "hallucinated_chctl_commands": hallucinated_chctl_commands,
-            "chctl_commands_run_in_demo_app": sum(command_mentions_chctl(command) and command_in_demo_app(command) for command in bash_commands),
-            "chctl_commands_run_outside_demo_app": sum(command_mentions_chctl(command) and not command_in_demo_app(command) for command in bash_commands),
             "npx_skills_command_calls": len(npx_skills_commands),
             "npx_skills_commands": npx_skills_commands,
             "chctl_skills_command_calls": len(chctl_skills_commands),
@@ -591,16 +597,18 @@ tests:
             "skill_sideload_paths": skill_sideload_paths,
             "mentioned_skill_in_agent_text": "skill" in all_text,
             "mentioned_chctl_in_agent_text": "chctl" in all_text,
-            "mentioned_clickhousectl_in_agent_text": "clickhousectl" in all_text,
+            "mentioned_chc_in_agent_text": "chc" in all_text,
+            "mentioned_clickhouse_cloud_in_agent_text": "clickhouse cloud" in all_text,
+            "attempted_cloud_provision_command": any(term in all_commands for term in provision_terms),
+            "dry_run_mentioned_or_used": any(term in all_commands or term in all_text for term in dry_run_terms),
+            "auth_blocker_seen": any(term in all_outputs or term in all_text for term in ["auth", "login", "credential", "organization", "unauthorized", "forbidden"]),
             "commands": bash_commands,
         }
-        for metric_name, keywords in workflow_keywords.items():
-            metrics[metric_name] = sum(any(keyword in command for keyword in keywords) for command in lowered_commands)
 
         with open("/workspace/trace-command-metrics.json", "w") as out:
             json.dump(metrics, out, indent=2, sort_keys=True)
         PY
 limits:
-  max_turns: 55
-  max_time_seconds: 1500
-  max_cost_usd: 2.00
+  max_turns: 45
+  max_time_seconds: 1200
+  max_cost_usd: 1.50

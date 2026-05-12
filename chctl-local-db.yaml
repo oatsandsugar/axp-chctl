@@ -238,8 +238,8 @@ tests:
         import re
         import shlex
 
-        bash_commands = []
-        bash_outputs = []
+        bash_calls = []
+        bash_call_by_id = {}
         tool_names = []
         agent_text = []
         skill_mentions = 0
@@ -260,14 +260,21 @@ tests:
                 if tool_name == "Bash" and isinstance(raw_input, dict):
                     command = raw_input.get("command")
                     if isinstance(command, str):
-                        bash_commands.append(command)
+                        tool_call_id = event.get("tool_call_id")
+                        call = {"command": command, "outputs": []}
+                        bash_calls.append(call)
+                        if isinstance(tool_call_id, str):
+                            bash_call_by_id[tool_call_id] = call
 
                 tool_response = meta.get("toolResponse")
                 if tool_name == "Bash" and isinstance(tool_response, dict):
+                    tool_call_id = event.get("tool_call_id")
+                    call = bash_call_by_id.get(tool_call_id)
                     for key in ["stdout", "stderr"]:
                         value = tool_response.get(key)
                         if isinstance(value, str) and value:
-                            bash_outputs.append(value)
+                            if call is not None:
+                                call["outputs"].append(value)
 
                 for content_key in ["content"]:
                     content = update.get(content_key)
@@ -298,6 +305,14 @@ tests:
             normalized = {word.rsplit("/", 1)[-1] for word in executables}
             return any(name in normalized for name in names)
 
+        def command_mentions_chctl(command):
+            return has_executable(command, {"chctl", "clickhousectl"})
+
+        def command_mentions_generic_clickhouse(command):
+            return has_executable(command, {"clickhouse", "clickhouse-client", "clickhouse-server"})
+
+        bash_commands = [call["command"] for call in bash_calls]
+        bash_outputs = [output for call in bash_calls for output in call["outputs"]]
         all_commands = "\n".join(bash_commands).lower()
         all_outputs = "\n".join(bash_outputs).lower()
         all_text = "\n".join(agent_text).lower()
@@ -305,6 +320,11 @@ tests:
         chctl_command_calls = sum(has_executable(command, {"chctl"}) for command in bash_commands)
         clickhousectl_command_calls = sum(has_executable(command, {"clickhousectl"}) for command in bash_commands)
         clickhouse_command_calls = sum(has_executable(command, {"clickhouse"}) for command in bash_commands)
+        chctl_command_indexes = [
+            idx for idx, command in enumerate(bash_commands)
+            if command_mentions_chctl(command)
+        ]
+        first_chctl_command_index = chctl_command_indexes[0] if chctl_command_indexes else -1
         help_calls = sum(1 for command in bash_commands if "--help" in command or re.search(r"\bhelp\b", command))
         install_commands = sum(
             1 for command in bash_commands
@@ -350,6 +370,41 @@ tests:
             if ("chctl" in command.lower() or "clickhouse" in command.lower())
             and any(token in command.lower() for token in ["awk", "sed", "jq", "python", "node", "grep"])
         )
+        failed_chctl_command_calls = 0
+        for call in bash_calls:
+            command = call["command"]
+            if not command_mentions_chctl(command):
+                continue
+            command_outputs = "\n".join(call["outputs"]).lower()
+            if any(marker in command_outputs for marker in ["error", "failed", "not found", "no such file", "permission denied", "cannot", "exit status"]):
+                failed_chctl_command_calls += 1
+
+        def sequence_index(patterns):
+            start = 0
+            indexes = []
+            lowered = [command.lower() for command in bash_commands]
+            for pattern in patterns:
+                for idx in range(start, len(lowered)):
+                    if pattern in lowered[idx]:
+                        indexes.append(idx)
+                        start = idx + 1
+                        break
+                else:
+                    return []
+            return indexes
+
+        expected_sequence_indexes = sequence_index([
+            "chctl local install",
+            "chctl local init",
+            "chctl local server start",
+            "chctl local client",
+        ])
+        used_expected_sequence = bool(expected_sequence_indexes)
+        fell_back_to_clickhouse = bool(chctl_command_indexes) and any(
+            command_mentions_generic_clickhouse(command)
+            for idx, command in enumerate(bash_commands)
+            if idx > chctl_command_indexes[0]
+        )
 
         def count_tool(name):
             return sum(1 for tool_name in tool_names if tool_name == name)
@@ -363,6 +418,11 @@ tests:
             "chctl_command_calls": chctl_command_calls,
             "clickhousectl_command_calls": clickhousectl_command_calls,
             "clickhouse_command_calls": clickhouse_command_calls,
+            "first_chctl_command_index": first_chctl_command_index,
+            "failed_chctl_command_calls": failed_chctl_command_calls,
+            "used_expected_sequence": used_expected_sequence,
+            "expected_sequence_indexes": expected_sequence_indexes,
+            "fell_back_to_clickhouse": fell_back_to_clickhouse,
             "help_calls": help_calls,
             "install_commands": install_commands,
             "error_like_outputs": error_like_outputs,
@@ -386,6 +446,10 @@ tests:
             out.write(f"chctl_command_calls={chctl_command_calls}\n")
             out.write(f"clickhousectl_command_calls={clickhousectl_command_calls}\n")
             out.write(f"clickhouse_command_calls={clickhouse_command_calls}\n")
+            out.write(f"first_chctl_command_index={first_chctl_command_index}\n")
+            out.write(f"failed_chctl_command_calls={failed_chctl_command_calls}\n")
+            out.write(f"used_expected_sequence={str(used_expected_sequence).lower()}\n")
+            out.write(f"fell_back_to_clickhouse={str(fell_back_to_clickhouse).lower()}\n")
             out.write(f"help_calls={help_calls}\n")
             out.write(f"install_commands={install_commands}\n")
             out.write(f"error_like_outputs={error_like_outputs}\n")

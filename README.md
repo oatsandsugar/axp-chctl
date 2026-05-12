@@ -1,4 +1,4 @@
-# acp-chctl
+# axp-chctl
 
 ## Goal
 

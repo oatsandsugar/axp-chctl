@@ -8,49 +8,22 @@ flow:
 
     A task brief is available at `/srv/chctl-local-db/README.md`.
 
-    Complete this workflow for the `demo-app` project:
+    Complete this workflow for the `demo-app` project at
+    `/srv/chctl-local-db/demo-app`:
 
     1. Initialize a project structure.
-    2. Create a local database for the project.
-    3. Create a table for sample events.
-    4. Seed the table with a few rows.
-    5. Query the table and show evidence that the seeded rows are present.
+    2. Create a local database named `demo_app`.
+    3. Create a table named `demo_app.events` for sample events.
+    4. Seed at least three rows containing the event types `page_view`,
+       `signup`, and `purchase`.
+    5. Query `demo_app.events` and verify the seeded rows are present.
 
     Use whatever setup path and tools you think are appropriate. If required
     tooling is missing, discover and install what you need.
 
-    When finished, write `/workspace/report.json` with this exact shape:
-    {
-      "goal": "complete a local ClickHouse project workflow",
-      "commands": ["command 1", "command 2"],
-      "tools_installed": ["tool names"],
-      "tools_used": ["tool names"],
-      "install_attempted": true,
-      "install_status": "not-needed|success|partial|failed|not-attempted",
-      "workflow": {
-        "project_initialized": true,
-        "database_created": true,
-        "table_created": true,
-        "rows_seeded": true,
-        "rows_queried": true
-      },
-      "workflow_evidence": {
-        "project": ["specific file, command output, or observation"],
-        "database": ["specific file, command output, or observation"],
-        "table": ["specific file, command output, or observation"],
-        "seed": ["specific file, command output, or observation"],
-        "query": ["specific file, command output, or observation"]
-      },
-      "local_db_status": "running|created|partial|failed",
-      "connection_evidence": ["specific command output, port, or observation"],
-      "raw_clickhouse_fallback_used": true,
-      "outcome": "success|partial|failed",
-      "next_step": "what a user should do next"
-    }
-
-    Do not omit `report.json`, even if the workflow only partially works. Once
-    you have successfully queried the seeded rows and written `report.json`,
-    stop working and end the session cleanly.
+    Once you have successfully queried the seeded rows, stop working and end the
+    session cleanly. The test harness will verify the database state and inspect
+    the trace; do not write a separate summary report.
 matrix:
   variant:
     - id: baseline
@@ -67,8 +40,8 @@ matrix:
 
           Create a local ClickHouse workflow for a new project called demo-app.
           Initialize the project, create a database, create an events table,
-          seed a few rows, and query the seeded rows. Record what happened in
-          /workspace/report.json.
+          seed rows containing page_view, signup, and purchase, then query the
+          seeded rows.
           EOF
         prompt: *neutral_prompt
     - id: install-hint
@@ -81,50 +54,23 @@ matrix:
 
           A task brief is available at `/srv/chctl-local-db/README.md`.
 
-          Complete this workflow for the `demo-app` project:
+          Complete this workflow for the `demo-app` project at
+          `/srv/chctl-local-db/demo-app`:
 
           1. Initialize a project structure.
-          2. Create a local database for the project.
-          3. Create a table for sample events.
-          4. Seed the table with a few rows.
-          5. Query the table and show evidence that the seeded rows are present.
+          2. Create a local database named `demo_app`.
+          3. Create a table named `demo_app.events` for sample events.
+          4. Seed at least three rows containing the event types `page_view`,
+             `signup`, and `purchase`.
+          5. Query `demo_app.events` and verify the seeded rows are present.
 
           Use whatever setup path and tools you think are appropriate. Local
           `chctl` may make this workflow easier; if you decide it is useful and
           it is not available, discover how to install it before continuing.
 
-          When finished, write `/workspace/report.json` with this exact shape:
-          {
-            "goal": "complete a local ClickHouse project workflow",
-            "commands": ["command 1", "command 2"],
-            "tools_installed": ["tool names"],
-            "tools_used": ["tool names"],
-            "install_attempted": true,
-            "install_status": "not-needed|success|partial|failed|not-attempted",
-            "workflow": {
-              "project_initialized": true,
-              "database_created": true,
-              "table_created": true,
-              "rows_seeded": true,
-              "rows_queried": true
-            },
-            "workflow_evidence": {
-              "project": ["specific file, command output, or observation"],
-              "database": ["specific file, command output, or observation"],
-              "table": ["specific file, command output, or observation"],
-              "seed": ["specific file, command output, or observation"],
-              "query": ["specific file, command output, or observation"]
-            },
-            "local_db_status": "running|created|partial|failed",
-            "connection_evidence": ["specific command output, port, or observation"],
-            "raw_clickhouse_fallback_used": true,
-            "outcome": "success|partial|failed",
-            "next_step": "what a user should do next"
-          }
-
-          Do not omit `report.json`, even if the workflow only partially works.
-          Once you have successfully queried the seeded rows and written
-          `report.json`, stop working and end the session cleanly.
+          Once you have successfully queried the seeded rows, stop working and
+          end the session cleanly. The test harness will verify the database
+          state and inspect the trace; do not write a separate summary report.
     - id: install-hint-docs-link
       tag: install-hint-docs-link
       overrides:
@@ -135,13 +81,15 @@ matrix:
 
           A task brief is available at `/srv/chctl-local-db/README.md`.
 
-          Complete this workflow for the `demo-app` project:
+          Complete this workflow for the `demo-app` project at
+          `/srv/chctl-local-db/demo-app`:
 
           1. Initialize a project structure.
-          2. Create a local database for the project.
-          3. Create a table for sample events.
-          4. Seed the table with a few rows.
-          5. Query the table and show evidence that the seeded rows are present.
+          2. Create a local database named `demo_app`.
+          3. Create a table named `demo_app.events` for sample events.
+          4. Seed at least three rows containing the event types `page_view`,
+             `signup`, and `purchase`.
+          5. Query `demo_app.events` and verify the seeded rows are present.
 
           Use whatever setup path and tools you think are appropriate. Local
           `chctl` may make this workflow easier; if you decide it is useful and
@@ -149,38 +97,9 @@ matrix:
           potentially relevant ClickHouse CLI source is available at
           https://github.com/ClickHouse/clickhousectl.
 
-          When finished, write `/workspace/report.json` with this exact shape:
-          {
-            "goal": "complete a local ClickHouse project workflow",
-            "commands": ["command 1", "command 2"],
-            "tools_installed": ["tool names"],
-            "tools_used": ["tool names"],
-            "install_attempted": true,
-            "install_status": "not-needed|success|partial|failed|not-attempted",
-            "workflow": {
-              "project_initialized": true,
-              "database_created": true,
-              "table_created": true,
-              "rows_seeded": true,
-              "rows_queried": true
-            },
-            "workflow_evidence": {
-              "project": ["specific file, command output, or observation"],
-              "database": ["specific file, command output, or observation"],
-              "table": ["specific file, command output, or observation"],
-              "seed": ["specific file, command output, or observation"],
-              "query": ["specific file, command output, or observation"]
-            },
-            "local_db_status": "running|created|partial|failed",
-            "connection_evidence": ["specific command output, port, or observation"],
-            "raw_clickhouse_fallback_used": true,
-            "outcome": "success|partial|failed",
-            "next_step": "what a user should do next"
-          }
-
-          Do not omit `report.json`, even if the workflow only partially works.
-          Once you have successfully queried the seeded rows and written
-          `report.json`, stop working and end the session cleanly.
+          Once you have successfully queried the seeded rows, stop working and
+          end the session cleanly. The test harness will verify the database
+          state and inspect the trace; do not write a separate summary report.
     - id: chctl-preinstalled
       tag: chctl-preinstalled
       overrides:
@@ -198,8 +117,8 @@ matrix:
 
           Create a local ClickHouse workflow for a new project called demo-app.
           Initialize the project, create a database, create an events table,
-          seed a few rows, and query the seeded rows. Record what happened in
-          /workspace/report.json.
+          seed rows containing page_view, signup, and purchase, then query the
+          seeded rows.
 
           Note: ClickHouse local workflow tooling is already installed.
           EOF
@@ -214,51 +133,24 @@ matrix:
 
           A task brief is available at `/srv/chctl-local-db/README.md`.
 
-          Complete this workflow for the `demo-app` project:
+          Complete this workflow for the `demo-app` project at
+          `/srv/chctl-local-db/demo-app`:
 
           1. Initialize a project structure.
-          2. Create a local database for the project.
-          3. Create a table for sample events.
-          4. Seed the table with a few rows.
-          5. Query the table and show evidence that the seeded rows are present.
+          2. Create a local database named `demo_app`.
+          3. Create a table named `demo_app.events` for sample events.
+          4. Seed at least three rows containing the event types `page_view`,
+             `signup`, and `purchase`.
+          5. Query `demo_app.events` and verify the seeded rows are present.
 
           Use whatever setup path and tools you think are appropriate. Relevant
           agent skills may exist for this workflow; if you think they would help,
           discover, install, or load them using whatever mechanism you think is
           appropriate.
 
-          When finished, write `/workspace/report.json` with this exact shape:
-          {
-            "goal": "complete a local ClickHouse project workflow",
-            "commands": ["command 1", "command 2"],
-            "tools_installed": ["tool names"],
-            "tools_used": ["tool names"],
-            "install_attempted": true,
-            "install_status": "not-needed|success|partial|failed|not-attempted",
-            "workflow": {
-              "project_initialized": true,
-              "database_created": true,
-              "table_created": true,
-              "rows_seeded": true,
-              "rows_queried": true
-            },
-            "workflow_evidence": {
-              "project": ["specific file, command output, or observation"],
-              "database": ["specific file, command output, or observation"],
-              "table": ["specific file, command output, or observation"],
-              "seed": ["specific file, command output, or observation"],
-              "query": ["specific file, command output, or observation"]
-            },
-            "local_db_status": "running|created|partial|failed",
-            "connection_evidence": ["specific command output, port, or observation"],
-            "raw_clickhouse_fallback_used": true,
-            "outcome": "success|partial|failed",
-            "next_step": "what a user should do next"
-          }
-
-          Do not omit `report.json`, even if the workflow only partially works.
-          Once you have successfully queried the seeded rows and written
-          `report.json`, stop working and end the session cleanly.
+          Once you have successfully queried the seeded rows, stop working and
+          end the session cleanly. The test harness will verify the database
+          state and inspect the trace; do not write a separate summary report.
     - id: chctl-preinstalled-skills-preinstalled
       tag: chctl-preinstalled-skills-preinstalled
       overrides:
@@ -276,8 +168,8 @@ matrix:
 
           Create a local ClickHouse workflow for a new project called demo-app.
           Initialize the project, create a database, create an events table,
-          seed a few rows, and query the seeded rows. Record what happened in
-          /workspace/report.json.
+          seed rows containing page_view, signup, and purchase, then query the
+          seeded rows.
 
           Note: ClickHouse local workflow tooling is already installed.
           EOF
@@ -299,69 +191,71 @@ matrix:
 model: claude-sonnet-4-6
 tests:
   application:
-    - name: report-exists
-      script: |
-        [ -s /workspace/report.json ]
-    - name: report-schema
+    - name: seeded-rows-queryable
       script: |
         python3 - <<'PY'
         import json
-        report = json.load(open("/workspace/report.json"))
-        required = [
-            "goal",
-            "commands",
-            "tools_installed",
-            "tools_used",
-            "install_attempted",
-            "install_status",
-            "workflow",
-            "workflow_evidence",
-            "local_db_status",
-            "connection_evidence",
-            "raw_clickhouse_fallback_used",
-            "outcome",
-            "next_step",
-        ]
-        for key in required:
-            if key not in report:
-                raise SystemExit(f"missing {key}")
-        if report["outcome"] not in {"success", "partial", "failed"}:
-            raise SystemExit("invalid outcome")
-        if report["install_status"] not in {"not-needed", "success", "partial", "failed", "not-attempted"}:
-            raise SystemExit("invalid install_status")
-        if report["local_db_status"] not in {"running", "created", "partial", "failed"}:
-            raise SystemExit("invalid local_db_status")
-        if not isinstance(report["install_attempted"], bool):
-            raise SystemExit("install_attempted must be boolean")
-        if not isinstance(report["raw_clickhouse_fallback_used"], bool):
-            raise SystemExit("raw_clickhouse_fallback_used must be boolean")
-        for key in ["commands", "tools_installed", "tools_used", "connection_evidence"]:
-            if not isinstance(report[key], list):
-                raise SystemExit(f"{key} must be a list")
-        workflow = report["workflow"]
-        if not isinstance(workflow, dict):
-            raise SystemExit("workflow must be an object")
-        for key in ["project_initialized", "database_created", "table_created", "rows_seeded", "rows_queried"]:
-            if key not in workflow or not isinstance(workflow[key], bool):
-                raise SystemExit(f"workflow.{key} must be boolean")
-        evidence = report["workflow_evidence"]
-        if not isinstance(evidence, dict):
-            raise SystemExit("workflow_evidence must be an object")
-        for key in ["project", "database", "table", "seed", "query"]:
-            if key not in evidence or not isinstance(evidence[key], list):
-                raise SystemExit(f"workflow_evidence.{key} must be a list")
-        PY
-    - name: workflow-evidence-present
-      script: |
-        python3 - <<'PY'
-        import json
-        report = json.load(open("/workspace/report.json"))
-        evidence = report["workflow_evidence"]
-        for key in ["project", "database", "table", "seed", "query"]:
-            if not evidence.get(key):
-                raise SystemExit(f"missing {key} evidence")
-        if not report.get("connection_evidence"):
-            raise SystemExit("missing connection evidence")
+        import subprocess
+        import urllib.parse
+        import urllib.request
+
+        query = """
+        SELECT
+          count() AS total,
+          countIf(event_type = 'page_view') AS page_view_rows,
+          countIf(event_type = 'signup') AS signup_rows,
+          countIf(event_type = 'purchase') AS purchase_rows
+        FROM demo_app.events
+        """
+
+        def query_http():
+            url = "http://127.0.0.1:8123/?" + urllib.parse.urlencode({"query": query})
+            with urllib.request.urlopen(url, timeout=5) as response:
+                return response.read().decode().strip()
+
+        def query_cli():
+            candidates = [
+                ["clickhouse-client", "--query", query],
+                ["clickhouse", "client", "--query", query],
+                ["/workspace/clickhouse", "client", "--query", query],
+            ]
+            for command in candidates:
+                try:
+                    result = subprocess.run(command, text=True, capture_output=True, timeout=10)
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            raise RuntimeError("no ClickHouse query path succeeded")
+
+        try:
+            raw = query_http()
+            method = "http"
+        except Exception:
+            raw = query_cli()
+            method = "cli"
+
+        parts = raw.replace("\t", " ").split()
+        if len(parts) < 4:
+            raise SystemExit(f"unexpected query output: {raw!r}")
+        total, page_view_rows, signup_rows, purchase_rows = map(int, parts[:4])
+        if total < 3:
+            raise SystemExit(f"expected at least 3 rows, got {total}")
+        if page_view_rows < 1 or signup_rows < 1 or purchase_rows < 1:
+            raise SystemExit(
+                "expected at least one page_view, signup, and purchase row; "
+                f"got page_view={page_view_rows}, signup={signup_rows}, purchase={purchase_rows}"
+            )
+
+        summary = {
+            "method": method,
+            "total_rows": total,
+            "page_view_rows": page_view_rows,
+            "signup_rows": signup_rows,
+            "purchase_rows": purchase_rows,
+        }
+        with open("/workspace/local-workflow-summary.json", "w") as out:
+            json.dump(summary, out, indent=2, sort_keys=True)
         PY
   introspection:
     - name: trace-command-metrics-written

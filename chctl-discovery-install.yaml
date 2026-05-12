@@ -10,19 +10,9 @@ flow:
     ClickHouse. Use whatever setup path you think is appropriate. If you
     install any CLI or other tool, record exactly what you installed and why.
 
-    When finished, write `/workspace/report.json` with this exact shape:
-    {
-      "goal": "create a local ClickHouse project",
-      "commands": ["command 1", "command 2"],
-      "tools_installed": ["tool names"],
-      "tools_used": ["tool names"],
-      "project_path": "/workspace/demo-app",
-      "outcome": "success|partial|failed",
-      "evidence": ["specific file, command output, or observation"],
-      "next_step": "what a user should do next"
-    }
-
-    Do not omit `report.json`, even if the project setup only partially works.
+    Once the project exists and contains useful scaffold files, stop working and
+    end the session cleanly. The test harness will inspect the workspace and
+    trace; do not write a separate summary report.
 matrix:
   variant:
     - id: baseline
@@ -30,41 +20,6 @@ matrix:
 model: claude-sonnet-4-6
 tests:
   application:
-    - name: report-exists
-      script: |
-        [ -s /workspace/report.json ]
-    - name: report-schema
-      script: |
-        python3 - <<'PY'
-        import json
-        report = json.load(open("/workspace/report.json"))
-        required = [
-            "goal",
-            "commands",
-            "tools_installed",
-            "tools_used",
-            "project_path",
-            "outcome",
-            "evidence",
-            "next_step",
-        ]
-        for key in required:
-            if key not in report:
-                raise SystemExit(f"missing {key}")
-        if report["outcome"] not in {"success", "partial", "failed"}:
-            raise SystemExit("invalid outcome")
-        for key in ["commands", "tools_installed", "tools_used", "evidence"]:
-            if not isinstance(report[key], list):
-                raise SystemExit(f"{key} must be a list")
-        PY
-    - name: project-path-recorded
-      script: |
-        python3 - <<'PY'
-        import json
-        report = json.load(open("/workspace/report.json"))
-        if "demo-app" not in str(report.get("project_path", "")):
-            raise SystemExit("project_path should refer to demo-app")
-        PY
     - name: project-scaffold-exists
       script: |
         python3 - <<'PY'
@@ -75,25 +30,6 @@ tests:
         files = [path for path in root.rglob("*") if path.is_file()]
         if not files:
             raise SystemExit("/workspace/demo-app does not contain scaffold files")
-        PY
-    - name: discovery-classification-written
-      script: |
-        python3 - <<'PY'
-        import json
-        report = json.load(open("/workspace/report.json"))
-        text = " ".join(
-            str(item)
-            for key in ["commands", "tools_installed", "tools_used", "evidence"]
-            for item in report.get(key, [])
-        ).lower()
-        used_chctl = "chctl" in text
-        used_clickhousectl = "clickhousectl" in text
-        mentioned_clickhouse = "clickhouse" in text
-        open("/workspace/discovery-classification.txt", "w").write(
-            "used_chctl=" + str(used_chctl).lower() + "\n"
-            + "used_clickhousectl=" + str(used_clickhousectl).lower() + "\n"
-            + "mentioned_clickhouse=" + str(mentioned_clickhouse).lower() + "\n"
-        )
         PY
   introspection:
     - name: trace-command-metrics-written

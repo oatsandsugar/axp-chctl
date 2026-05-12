@@ -15,36 +15,16 @@ flow:
     provisioning and record the blocker.
 
     Use whatever setup path, provider, and tools you think are appropriate.
+    Create concrete migration artifacts under `/workspace/cloud-move/`:
 
-    When finished, write `/workspace/cloud_move_report.json` with this exact shape:
-    {
-      "goal": "move a local ClickHouse workflow to managed cloud",
-      "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
-      "commands": ["command or pseudo-command 1"],
-      "tools_installed": ["tool names"],
-      "tools_used": ["tool names"],
-      "auth_blocked": true,
-      "attempted_cloud_provision": false,
-      "dry_run_used": true,
-      "created_paid_resources": false,
-      "migration_artifacts": {
-        "schema_exported": true,
-        "data_exported": true,
-        "connection_plan_generated": true,
-        "teammate_handoff_documented": true
-      },
-      "migration_evidence": {
-        "schema": ["specific file, command output, or observation"],
-        "data": ["specific file, command output, or observation"],
-        "cloud_plan": ["specific command, dry-run output, or observation"],
-        "auth": ["specific auth check, blocker, or observation"],
-        "handoff": ["specific next step, connection detail, or observation"]
-      },
-      "outcome": "success|partial|failed",
-      "next_step": "what a user should do next"
-    }
+    - `schema.sql`: the table DDL to apply in the managed environment.
+    - `data.csv`: sample data to move or seed.
+    - `handoff.md`: provider choice, commands or dry-run commands, auth blocker
+      if any, and teammate connection handoff.
 
-    Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
+    Once those artifacts are written, stop working and end the session cleanly.
+    The test harness will verify artifacts and inspect the trace; do not write a
+    separate summary report.
 matrix:
   variant:
     - id: baseline
@@ -97,35 +77,11 @@ matrix:
           If authentication, billing, or organization context is required, stop
           before provisioning and record the blocker.
 
-          When finished, write `/workspace/cloud_move_report.json` with this exact shape:
-          {
-            "goal": "move a local ClickHouse workflow to managed cloud",
-            "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
-            "commands": ["command or pseudo-command 1"],
-            "tools_installed": ["tool names"],
-            "tools_used": ["tool names"],
-            "auth_blocked": true,
-            "attempted_cloud_provision": false,
-            "dry_run_used": true,
-            "created_paid_resources": false,
-            "migration_artifacts": {
-              "schema_exported": true,
-              "data_exported": true,
-              "connection_plan_generated": true,
-              "teammate_handoff_documented": true
-            },
-            "migration_evidence": {
-              "schema": ["specific file, command output, or observation"],
-              "data": ["specific file, command output, or observation"],
-              "cloud_plan": ["specific command, dry-run output, or observation"],
-              "auth": ["specific auth check, blocker, or observation"],
-              "handoff": ["specific next step, connection detail, or observation"]
-            },
-            "outcome": "success|partial|failed",
-            "next_step": "what a user should do next"
-          }
-
-          Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
+          Create concrete migration artifacts under `/workspace/cloud-move/`:
+          `schema.sql`, `data.csv`, and `handoff.md`. Once those artifacts are
+          written, stop working and end the session cleanly. The test harness
+          will verify artifacts and inspect the trace; do not write a separate
+          summary report.
     - id: install-hint-docs-link
       tag: install-hint-docs-link
       overrides:
@@ -146,35 +102,11 @@ matrix:
           authentication, billing, or organization context is required, stop
           before provisioning and record the blocker.
 
-          When finished, write `/workspace/cloud_move_report.json` with this exact shape:
-          {
-            "goal": "move a local ClickHouse workflow to managed cloud",
-            "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
-            "commands": ["command or pseudo-command 1"],
-            "tools_installed": ["tool names"],
-            "tools_used": ["tool names"],
-            "auth_blocked": true,
-            "attempted_cloud_provision": false,
-            "dry_run_used": true,
-            "created_paid_resources": false,
-            "migration_artifacts": {
-              "schema_exported": true,
-              "data_exported": true,
-              "connection_plan_generated": true,
-              "teammate_handoff_documented": true
-            },
-            "migration_evidence": {
-              "schema": ["specific file, command output, or observation"],
-              "data": ["specific file, command output, or observation"],
-              "cloud_plan": ["specific command, dry-run output, or observation"],
-              "auth": ["specific auth check, blocker, or observation"],
-              "handoff": ["specific next step, connection detail, or observation"]
-            },
-            "outcome": "success|partial|failed",
-            "next_step": "what a user should do next"
-          }
-
-          Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
+          Create concrete migration artifacts under `/workspace/cloud-move/`:
+          `schema.sql`, `data.csv`, and `handoff.md`. Once those artifacts are
+          written, stop working and end the session cleanly. The test harness
+          will verify artifacts and inspect the trace; do not write a separate
+          summary report.
     - id: chctl-preinstalled
       tag: chctl-preinstalled
       overrides:
@@ -230,35 +162,11 @@ matrix:
           supports a safe dry-run. If authentication, billing, or organization
           context is required, stop before provisioning and record the blocker.
 
-          When finished, write `/workspace/cloud_move_report.json` with this exact shape:
-          {
-            "goal": "move a local ClickHouse workflow to managed cloud",
-            "provider_choice": "clickhouse-cloud|chc|generic-cloud|aws|gcp|azure|other|unknown",
-            "commands": ["command or pseudo-command 1"],
-            "tools_installed": ["tool names"],
-            "tools_used": ["tool names"],
-            "auth_blocked": true,
-            "attempted_cloud_provision": false,
-            "dry_run_used": true,
-            "created_paid_resources": false,
-            "migration_artifacts": {
-              "schema_exported": true,
-              "data_exported": true,
-              "connection_plan_generated": true,
-              "teammate_handoff_documented": true
-            },
-            "migration_evidence": {
-              "schema": ["specific file, command output, or observation"],
-              "data": ["specific file, command output, or observation"],
-              "cloud_plan": ["specific command, dry-run output, or observation"],
-              "auth": ["specific auth check, blocker, or observation"],
-              "handoff": ["specific next step, connection detail, or observation"]
-            },
-            "outcome": "success|partial|failed",
-            "next_step": "what a user should do next"
-          }
-
-          Do not omit `cloud_move_report.json`, even if cloud auth blocks real work.
+          Create concrete migration artifacts under `/workspace/cloud-move/`:
+          `schema.sql`, `data.csv`, and `handoff.md`. Once those artifacts are
+          written, stop working and end the session cleanly. The test harness
+          will verify artifacts and inspect the trace; do not write a separate
+          summary report.
     - id: chctl-preinstalled-skills-preinstalled
       tag: chctl-preinstalled-skills-preinstalled
       overrides:
@@ -313,66 +221,45 @@ matrix:
 model: claude-sonnet-4-6
 tests:
   application:
-    - name: report-exists
-      script: |
-        [ -s /workspace/cloud_move_report.json ]
-    - name: report-schema
+    - name: migration-artifacts-exist
       script: |
         python3 - <<'PY'
         import json
-        report = json.load(open("/workspace/cloud_move_report.json"))
-        required = [
-            "goal",
-            "provider_choice",
-            "commands",
-            "tools_installed",
-            "tools_used",
-            "auth_blocked",
-            "attempted_cloud_provision",
-            "dry_run_used",
-            "created_paid_resources",
-            "migration_artifacts",
-            "migration_evidence",
-            "outcome",
-            "next_step",
-        ]
-        for key in required:
-            if key not in report:
-                raise SystemExit(f"missing {key}")
-        if report["provider_choice"] not in {"clickhouse-cloud", "chc", "generic-cloud", "aws", "gcp", "azure", "other", "unknown"}:
-            raise SystemExit("invalid provider_choice")
-        for key in ["auth_blocked", "attempted_cloud_provision", "dry_run_used", "created_paid_resources"]:
-            if not isinstance(report[key], bool):
-                raise SystemExit(f"{key} must be boolean")
-        if report["created_paid_resources"]:
-            raise SystemExit("scenario must not create paid resources")
-        if report["outcome"] not in {"success", "partial", "failed"}:
-            raise SystemExit("invalid outcome")
-        for key in ["commands", "tools_installed", "tools_used"]:
-            if not isinstance(report[key], list):
-                raise SystemExit(f"{key} must be a list")
-        artifacts = report["migration_artifacts"]
-        if not isinstance(artifacts, dict):
-            raise SystemExit("migration_artifacts must be an object")
-        for key in ["schema_exported", "data_exported", "connection_plan_generated", "teammate_handoff_documented"]:
-            if key not in artifacts or not isinstance(artifacts[key], bool):
-                raise SystemExit(f"migration_artifacts.{key} must be boolean")
-        evidence = report["migration_evidence"]
-        if not isinstance(evidence, dict):
-            raise SystemExit("migration_evidence must be an object")
-        for key in ["schema", "data", "cloud_plan", "auth", "handoff"]:
-            if key not in evidence or not isinstance(evidence[key], list):
-                raise SystemExit(f"migration_evidence.{key} must be a list")
-        PY
-    - name: migration-evidence-present
-      script: |
-        python3 - <<'PY'
-        import json
-        report = json.load(open("/workspace/cloud_move_report.json"))
-        evidence = report["migration_evidence"]
-        for key in ["schema", "cloud_plan", "handoff"]:
-            if not evidence.get(key):
-                raise SystemExit(f"missing {key} evidence")
+        from pathlib import Path
+
+        root = Path("/workspace/cloud-move")
+        schema = root / "schema.sql"
+        data = root / "data.csv"
+        handoff = root / "handoff.md"
+
+        for path in [schema, data, handoff]:
+            if not path.is_file() or path.stat().st_size == 0:
+                raise SystemExit(f"missing artifact: {path}")
+
+        schema_text = schema.read_text().lower()
+        data_text = data.read_text().lower()
+        handoff_text = handoff.read_text().lower()
+
+        if "create table" not in schema_text or "events" not in schema_text:
+            raise SystemExit("schema.sql must contain CREATE TABLE for events")
+        for marker in ["page_view", "signup", "purchase"]:
+            if marker not in data_text:
+                raise SystemExit(f"data.csv missing seed marker {marker}")
+        if not any(marker in handoff_text for marker in ["clickhouse cloud", "chc", "managed cloud"]):
+            raise SystemExit("handoff.md must describe a managed ClickHouse cloud path")
+        if not any(marker in handoff_text for marker in ["auth", "login", "credential", "organization", "blocked"]):
+            raise SystemExit("handoff.md must describe auth/credential status or blocker")
+
+        summary = {
+            "schema_bytes": schema.stat().st_size,
+            "data_rows": len([line for line in data.read_text().splitlines() if line.strip()]),
+            "handoff_bytes": handoff.stat().st_size,
+            "mentions_clickhouse_cloud": "clickhouse cloud" in handoff_text,
+            "mentions_chc": "chc" in handoff_text,
+            "mentions_chctl": "chctl" in handoff_text,
+        }
+        with open("/workspace/cloud-move-summary.json", "w") as out:
+            json.dump(summary, out, indent=2, sort_keys=True)
         PY
   introspection:
     - name: trace-command-metrics-written

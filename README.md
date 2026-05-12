@@ -49,8 +49,8 @@ Run outputs are written under `.axp/runs/<run-group-id>/`.
 - [`chctl-discovery-install.yaml`](./chctl-discovery-install.yaml): baseline discovery test for whether agents find `chctl` without being told.
 - [`chctl-local-db.yaml`](./chctl-local-db.yaml): local project/database/table/seed/query workflow across the variant ladder.
 - [`chctl-cloud-move.yaml`](./chctl-cloud-move.yaml): local-to-cloud handoff workflow across the same variant ladder.
-- `.axp/runs/<run-group-id>/variants/<variant>/workspace/report.json`: local workflow report produced by the agent.
-- `.axp/runs/<run-group-id>/variants/<variant>/workspace/cloud_move_report.json`: cloud workflow report produced by the agent.
+- `.axp/runs/<run-group-id>/variants/<variant>/workspace/local-workflow-summary.json`: deterministic local DB summary written by application tests.
+- `.axp/runs/<run-group-id>/variants/<variant>/workspace/cloud-move-summary.json`: deterministic cloud handoff artifact summary written by application tests.
 - `.axp/runs/<run-group-id>/variants/<variant>/workspace/trace-command-metrics.json`: trace-derived metrics for tool choice, help usage, errors, fallback behavior, and skill behavior.
 - `.axp/runs/<run-group-id>/variants/<variant>/agent-events.jsonl`: raw trace for manual inspection.
 
@@ -101,7 +101,7 @@ Variants:
 | `chctl-preinstalled-skills-hint` | `chctl` present, skills absent | Hint that relevant agent skills may exist | The agent may try `npx skills ...`, `chctl skills ...`, or side-load skills before continuing the local DB workflow. |
 | `chctl-preinstalled-skills-preinstalled` | `chctl` present, `chctl`-provided skills present | Neutral local DB workflow prompt | Preinstalled skills should improve downstream command choice, reduce errors, and improve project-context recovery. |
 
-Metrics are defined in the scenario's application and introspection tests. The resulting `trace-command-metrics.json` is the source of truth for tool choice, help usage, errors, command quality, workflow completion, and skill behavior.
+Metrics are defined in the scenario's application and introspection tests. `local-workflow-summary.json` records the deterministic database query result, and `trace-command-metrics.json` is the source of truth for tool choice, help usage, errors, command quality, and skill behavior.
 
 ## Scenario 3: Move Local DB To Cloud
 
@@ -124,7 +124,7 @@ Variants:
 | `chctl-preinstalled-skills-hint` | Local project exists, `chctl` present, skills absent | Hint that relevant agent skills may exist | The agent may discover/install skills through `npx skills ...`, `chctl skills ...`, or side-loading, then use that guidance for the cloud plan. |
 | `chctl-preinstalled-skills-preinstalled` | Local project exists, `chctl` present, `chctl`-provided skills present | Neutral cloud move prompt | Preinstalled skills should improve provider choice, auth handling, dry-run safety, and the concreteness of the handoff. |
 
-Metrics are defined in the scenario's application and introspection tests. The resulting `trace-command-metrics.json` is the source of truth for provider choice, tool choice, auth/resource safety, migration quality, help usage, errors, and skill behavior.
+Metrics are defined in the scenario's application and introspection tests. The cloud scenario verifies concrete artifacts under `/workspace/cloud-move/`, writes `cloud-move-summary.json`, and uses `trace-command-metrics.json` as the source of truth for provider choice, tool choice, auth/resource safety, help usage, errors, and skill behavior.
 
 ## Reporting Principle
 

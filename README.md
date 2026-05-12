@@ -29,12 +29,6 @@ axp validate ./chctl-cloud-move.yaml
 Run the scenarios:
 
 ```sh
-./run-all.sh
-```
-
-Or run one scenario at a time:
-
-```sh
 axp run --env-file .env ./chctl-discovery-install.yaml
 axp run --env-file .env ./chctl-local-db.yaml
 axp run --env-file .env ./chctl-cloud-move.yaml

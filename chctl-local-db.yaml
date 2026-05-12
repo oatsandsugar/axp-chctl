@@ -318,6 +318,38 @@ tests:
             1 for output in bash_outputs
             if "not found" in output or "no matches found" in output
         )
+        scripting_executables = {"python", "python3", "node", "ruby", "perl", "awk", "sed", "jq"}
+        shell_filter_tokens = ["| grep", "| awk", "| sed", "| jq", "| cut", "| tr", "| sort", "| head", "| tail"]
+        generated_script_patterns = [
+            r"cat\s+>\s+\S+\.(py|sh|js|mjs|ts)\b",
+            r"tee\s+\S+\.(py|sh|js|mjs|ts)\b",
+            r"python3?\s+-\s*<<",
+            r"node\s+-\s*<<",
+        ]
+        scripting_command_calls = sum(has_executable(command, scripting_executables) for command in bash_commands)
+        generated_script_commands = sum(
+            1 for command in bash_commands
+            if any(re.search(pattern, command) for pattern in generated_script_patterns)
+        )
+        output_filter_pipeline_commands = sum(
+            1 for command in bash_commands
+            if any(token in command.lower() for token in shell_filter_tokens)
+        )
+        clickhouse_filter_pipeline_commands = sum(
+            1 for command in bash_commands
+            if ("chctl" in command.lower() or "clickhouse" in command.lower())
+            and any(token in command.lower() for token in shell_filter_tokens)
+        )
+        scripted_clickhouse_control_commands = sum(
+            1 for command in bash_commands
+            if has_executable(command, {"python", "python3", "node"})
+            and ("chctl" in command.lower() or "clickhouse" in command.lower())
+        )
+        possible_fake_feature_commands = sum(
+            1 for command in bash_commands
+            if ("chctl" in command.lower() or "clickhouse" in command.lower())
+            and any(token in command.lower() for token in ["awk", "sed", "jq", "python", "node", "grep"])
+        )
 
         def count_tool(name):
             return sum(1 for tool_name in tool_names if tool_name == name)
@@ -335,6 +367,12 @@ tests:
             "install_commands": install_commands,
             "error_like_outputs": error_like_outputs,
             "not_found_outputs": not_found_outputs,
+            "scripting_command_calls": scripting_command_calls,
+            "generated_script_commands": generated_script_commands,
+            "output_filter_pipeline_commands": output_filter_pipeline_commands,
+            "clickhouse_filter_pipeline_commands": clickhouse_filter_pipeline_commands,
+            "scripted_clickhouse_control_commands": scripted_clickhouse_control_commands,
+            "possible_fake_feature_commands": possible_fake_feature_commands,
             "used_chctl_skill": skill_mentions > 0,
             "mentioned_chctl_in_agent_text": "chctl" in all_text,
             "mentioned_clickhousectl_in_agent_text": "clickhousectl" in all_text,
@@ -352,6 +390,12 @@ tests:
             out.write(f"install_commands={install_commands}\n")
             out.write(f"error_like_outputs={error_like_outputs}\n")
             out.write(f"not_found_outputs={not_found_outputs}\n")
+            out.write(f"scripting_command_calls={scripting_command_calls}\n")
+            out.write(f"generated_script_commands={generated_script_commands}\n")
+            out.write(f"output_filter_pipeline_commands={output_filter_pipeline_commands}\n")
+            out.write(f"clickhouse_filter_pipeline_commands={clickhouse_filter_pipeline_commands}\n")
+            out.write(f"scripted_clickhouse_control_commands={scripted_clickhouse_control_commands}\n")
+            out.write(f"possible_fake_feature_commands={possible_fake_feature_commands}\n")
             out.write(f"used_chctl_skill={str(skill_mentions > 0).lower()}\n")
         PY
 limits:

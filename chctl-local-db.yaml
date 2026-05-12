@@ -221,29 +221,6 @@ tests:
             if not isinstance(report[key], list):
                 raise SystemExit(f"{key} must be a list")
         PY
-    - name: chctl-install-usage-classification-written
-      script: |
-        python3 - <<'PY'
-        import json
-        report = json.load(open("/workspace/report.json"))
-        text = " ".join(
-            str(item)
-            for key in ["commands", "tools_installed", "tools_used", "install_evidence", "connection_evidence"]
-            for item in report.get(key, [])
-        ).lower()
-        used_chctl = "chctl" in text or "clickhousectl" in text
-        install_text = " ".join(str(item) for item in report.get("install_evidence", [])).lower()
-        install_or_discovery = any(
-            marker in text or marker in install_text
-            for marker in ["curl", "brew", "npm", "apt", "install", "download", "clickhouse.com/cli"]
-        )
-        open("/workspace/chctl-install-usage-classification.txt", "w").write(
-            "used_chctl=" + str(used_chctl).lower() + "\n"
-            + "install_attempted=" + str(report.get("install_attempted")).lower() + "\n"
-            + "install_status=" + str(report.get("install_status")) + "\n"
-            + "install_or_discovery_evidence=" + str(install_or_discovery).lower() + "\n"
-        )
-        PY
     - name: local-db-evidence-present
       script: |
         python3 - <<'PY'
@@ -252,7 +229,131 @@ tests:
         if not report.get("connection_evidence"):
             raise SystemExit("missing connection evidence")
         PY
-  introspection: []
+  introspection:
+    - name: trace-command-metrics-written
+      script: |
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        import shlex
+
+        bash_commands = []
+        bash_outputs = []
+        tool_names = []
+        agent_text = []
+        skill_mentions = 0
+
+        with open(os.environ["AXP_TRACE_PATH"]) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                raw = event.get("raw_json", {})
+                update = raw.get("params", {}).get("update", {})
+                meta = update.get("_meta", {}).get("claudeCode", {})
+                tool_name = meta.get("toolName")
+                if isinstance(tool_name, str) and tool_name:
+                    tool_names.append(tool_name)
+
+                raw_input = update.get("rawInput")
+                if tool_name == "Bash" and isinstance(raw_input, dict):
+                    command = raw_input.get("command")
+                    if isinstance(command, str):
+                        bash_commands.append(command)
+
+                tool_response = meta.get("toolResponse")
+                if tool_name == "Bash" and isinstance(tool_response, dict):
+                    for key in ["stdout", "stderr"]:
+                        value = tool_response.get(key)
+                        if isinstance(value, str) and value:
+                            bash_outputs.append(value)
+
+                for content_key in ["content"]:
+                    content = update.get(content_key)
+                    if isinstance(content, dict):
+                        text = content.get("text")
+                        if isinstance(text, str):
+                            agent_text.append(text)
+                            if "chctl-clickhouse" in text:
+                                skill_mentions += 1
+
+        def shell_words(command):
+            try:
+                return shlex.split(command)
+            except ValueError:
+                return command.split()
+
+        def has_executable(command, names):
+            words = shell_words(command)
+            executables = []
+            if words:
+                executables.append(words[0])
+            for sep in ["|", "&&", ";"]:
+                parts = command.split(sep)
+                for part in parts[1:]:
+                    part_words = shell_words(part.strip())
+                    if part_words:
+                        executables.append(part_words[0])
+            normalized = {word.rsplit("/", 1)[-1] for word in executables}
+            return any(name in normalized for name in names)
+
+        all_commands = "\n".join(bash_commands).lower()
+        all_outputs = "\n".join(bash_outputs).lower()
+        all_text = "\n".join(agent_text).lower()
+
+        chctl_command_calls = sum(has_executable(command, {"chctl"}) for command in bash_commands)
+        clickhousectl_command_calls = sum(has_executable(command, {"clickhousectl"}) for command in bash_commands)
+        clickhouse_command_calls = sum(has_executable(command, {"clickhouse"}) for command in bash_commands)
+        help_calls = sum(1 for command in bash_commands if "--help" in command or re.search(r"\bhelp\b", command))
+        install_commands = sum(
+            1 for command in bash_commands
+            if any(marker in command.lower() for marker in ["install", "curl", "download", "clickhouse.com/cli", "clickhouse.com/install.sh"])
+        )
+        error_like_outputs = sum(
+            1 for output in bash_outputs
+            if any(marker in output for marker in ["error", "failed", "not found", "no such file", "permission denied", "cannot", "exit status"])
+        )
+        not_found_outputs = sum(
+            1 for output in bash_outputs
+            if "not found" in output or "no matches found" in output
+        )
+
+        def count_tool(name):
+            return sum(1 for tool_name in tool_names if tool_name == name)
+
+        metrics = {
+            "total_tool_calls": len(tool_names),
+            "bash_tool_calls": count_tool("Bash"),
+            "read_tool_calls": count_tool("Read"),
+            "web_search_tool_calls": count_tool("WebSearch"),
+            "agent_tool_calls": count_tool("Agent"),
+            "chctl_command_calls": chctl_command_calls,
+            "clickhousectl_command_calls": clickhousectl_command_calls,
+            "clickhouse_command_calls": clickhouse_command_calls,
+            "help_calls": help_calls,
+            "install_commands": install_commands,
+            "error_like_outputs": error_like_outputs,
+            "not_found_outputs": not_found_outputs,
+            "used_chctl_skill": skill_mentions > 0,
+            "mentioned_chctl_in_agent_text": "chctl" in all_text,
+            "mentioned_clickhousectl_in_agent_text": "clickhousectl" in all_text,
+            "commands": bash_commands,
+        }
+
+        with open("/workspace/trace-command-metrics.json", "w") as out:
+            json.dump(metrics, out, indent=2, sort_keys=True)
+
+        with open("/workspace/chctl-install-usage-classification.txt", "w") as out:
+            out.write(f"chctl_command_calls={chctl_command_calls}\n")
+            out.write(f"clickhousectl_command_calls={clickhousectl_command_calls}\n")
+            out.write(f"clickhouse_command_calls={clickhouse_command_calls}\n")
+            out.write(f"help_calls={help_calls}\n")
+            out.write(f"install_commands={install_commands}\n")
+            out.write(f"error_like_outputs={error_like_outputs}\n")
+            out.write(f"not_found_outputs={not_found_outputs}\n")
+            out.write(f"used_chctl_skill={str(skill_mentions > 0).lower()}\n")
+        PY
 limits:
   max_turns: 40
   max_time_seconds: 1200

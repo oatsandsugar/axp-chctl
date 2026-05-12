@@ -12,10 +12,10 @@ Install AXP:
 bash <(curl -fsSL https://dl.514.ai/install.sh) axp
 ```
 
-Set the model API key used by the agent runtime:
+Set the model API key used by the agent runtime in `.env`:
 
 ```sh
-export ANTHROPIC_API_KEY="..."
+echo 'ANTHROPIC_API_KEY=...' > .env
 ```
 
 Validate the scenarios:
@@ -29,9 +29,15 @@ axp validate ./chctl-cloud-move.yaml
 Run the scenarios:
 
 ```sh
-axp run ./chctl-discovery-install.yaml
-axp run ./chctl-local-db.yaml
-axp run ./chctl-cloud-move.yaml
+./run-all.sh
+```
+
+Or run one scenario at a time:
+
+```sh
+axp run --env-file .env ./chctl-discovery-install.yaml
+axp run --env-file .env ./chctl-local-db.yaml
+axp run --env-file .env ./chctl-cloud-move.yaml
 ```
 
 For a no-model-cost smoke check:

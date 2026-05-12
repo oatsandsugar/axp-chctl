@@ -213,27 +213,55 @@ tests:
             with urllib.request.urlopen(url, timeout=5) as response:
                 return response.read().decode().strip()
 
-        def query_cli():
-            candidates = [
-                ["clickhouse-client", "--query", query],
-                ["clickhouse", "client", "--query", query],
-                ["/workspace/clickhouse", "client", "--query", query],
-            ]
-            for command in candidates:
+        def run_query_candidates(candidates):
+            errors = []
+            for method_name, command in candidates:
                 try:
                     result = subprocess.run(command, text=True, capture_output=True, timeout=10)
-                except (FileNotFoundError, subprocess.TimeoutExpired):
+                except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                    errors.append(f"{method_name}: {exc}")
                     continue
                 if result.returncode == 0 and result.stdout.strip():
-                    return result.stdout.strip()
-            raise RuntimeError("no ClickHouse query path succeeded")
+                    return method_name, result.stdout.strip()
+                errors.append(
+                    f"{method_name}: exit={result.returncode} "
+                    f"stdout={result.stdout.strip()!r} stderr={result.stderr.strip()!r}"
+                )
+            raise RuntimeError("no ClickHouse query path succeeded:\n" + "\n".join(errors))
+
+        def query_cli():
+            candidates = [
+                ("clickhouse-client", ["clickhouse-client", "--query", query]),
+                ("clickhouse-client-subcommand", ["clickhouse", "client", "--query", query]),
+                ("workspace-clickhouse-client", ["/workspace/clickhouse", "client", "--query", query]),
+            ]
+            return run_query_candidates(candidates)
+
+        def query_clickhouse_local():
+            candidates = []
+            for binary in ["clickhouse", "/workspace/clickhouse"]:
+                for path in [
+                    "/srv/chctl-local-db/demo-app/data",
+                    "/srv/chctl-local-db/demo-app/db",
+                    "/workspace/demo-app/data",
+                    "/workspace/demo-app/db",
+                ]:
+                    candidates.append(
+                        (
+                            f"{binary} local --path {path}",
+                            [binary, "local", "--path", path, "--query", query],
+                        )
+                    )
+            return run_query_candidates(candidates)
 
         try:
             raw = query_http()
             method = "http"
         except Exception:
-            raw = query_cli()
-            method = "cli"
+            try:
+                method, raw = query_cli()
+            except Exception:
+                method, raw = query_clickhouse_local()
 
         parts = raw.replace("\t", " ").split()
         if len(parts) < 4:

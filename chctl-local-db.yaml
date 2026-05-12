@@ -48,7 +48,9 @@ flow:
       "next_step": "what a user should do next"
     }
 
-    Do not omit `report.json`, even if the workflow only partially works.
+    Do not omit `report.json`, even if the workflow only partially works. Once
+    you have successfully queried the seeded rows and written `report.json`,
+    stop working and end the session cleanly.
 matrix:
   variant:
     - id: baseline
@@ -121,6 +123,8 @@ matrix:
           }
 
           Do not omit `report.json`, even if the workflow only partially works.
+          Once you have successfully queried the seeded rows and written
+          `report.json`, stop working and end the session cleanly.
     - id: install-hint-docs-link
       tag: install-hint-docs-link
       overrides:
@@ -175,6 +179,8 @@ matrix:
           }
 
           Do not omit `report.json`, even if the workflow only partially works.
+          Once you have successfully queried the seeded rows and written
+          `report.json`, stop working and end the session cleanly.
     - id: chctl-preinstalled
       tag: chctl-preinstalled
       overrides:
@@ -251,6 +257,8 @@ matrix:
           }
 
           Do not omit `report.json`, even if the workflow only partially works.
+          Once you have successfully queried the seeded rows and written
+          `report.json`, stop working and end the session cleanly.
     - id: chctl-preinstalled-skills-preinstalled
       tag: chctl-preinstalled-skills-preinstalled
       overrides:

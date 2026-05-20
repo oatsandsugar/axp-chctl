@@ -1,0 +1,1338 @@
+# yaml-language-server: $schema=https://docs.514.ai/schema/scenario.v1.schema.yaml
+schema_version: 1
+id: db-design-efficiency
+name: "Measure LLM SQL efficiency across schema designs"
+description: |
+  Compares how efficiently an agent answers analytics questions across six
+  schema variants built from the same CRM + inventory + sales dataset:
+  normalized, wide flat, and ClickHouse-inspired analytics model; each with
+  and without descriptive column metadata.
+flow:
+  prompt: &default_prompt |
+    You are evaluating how efficiently an LLM can query a realistic business
+    dataset.
+
+    Read:
+    - `/srv/db-design-efficiency/README.md`
+    - `/srv/db-design-efficiency/query-questions.md`
+
+    Work from ClickHouse local path:
+    - `/srv/db-design-efficiency/chdb`
+
+    Requirements:
+    1. Use ClickHouse local for all data access and calculations.
+       Command shape:
+       `clickhouse local --path /srv/db-design-efficiency/chdb --query "<SQL>"`
+       If `column_descriptions` exists, use it as semantic guidance:
+       - `related_fields` explains join paths and field relationships.
+       - `metric_usage` explains how fields contribute to benchmark metrics.
+    2. Answer all 11 questions in `/workspace/query-results.json`.
+    3. Write a concise SQL worklog to `/workspace/query-worklog.md` with each
+       query attempt and a short note for any SQL error.
+    4. In `query-results.json`, include exactly these keys:
+       - `q1_total_customers`
+       - `q2_active_north_america_customers`
+       - `q3_net_revenue_last_30_days_cents`
+       - `q4_top_product_id_by_revenue_last_90_days`
+       - `q5_avg_enterprise_order_value_cents`
+       - `q6_best_revenue_month`
+       - `q7_active_customers_without_completed_orders_last_90_days`
+       - `q8_stockout_risk_products`
+       - `q9_promo_revenue_share_last_180_days_pct`
+       - `q10_repeat_buyers_within_60_days`
+       - `q11_best_campaign_roi_2025`
+
+    Return values only (numbers/strings), no prose in JSON.
+    If a question cannot be answered from available tables/columns, set that key
+    to the exact string `INSUFFICIENT_DATA` and explain the blocker in the
+    worklog.
+    Stop once both required files are written.
+    The harness will also evaluate correctness and efficiency from trace data.
+matrix:
+  variant:
+    - id: standard-no-descriptions
+      tag: standard-no-descriptions
+      overrides:
+        setup: &inline_dataset_setup |
+          set -euxo pipefail
+          apt-get update >/dev/null
+          apt-get install -y --no-install-recommends ca-certificates curl python3 sqlite3 >/dev/null
+          rm -rf /var/lib/apt/lists/*
+          curl -fsSL https://clickhouse.com/ | sh
+          install -m 0755 clickhouse /usr/local/bin/clickhouse
+          case "${AXP_VARIANT_ID:-}" in
+            standard-no-descriptions) MODEL=standard; INCLUDE_DESCRIPTIONS=0 ;;
+            standard-with-descriptions) MODEL=standard; INCLUDE_DESCRIPTIONS=1 ;;
+            standard-with-descriptions-describe-first) MODEL=standard; INCLUDE_DESCRIPTIONS=1 ;;
+            standard-no-descriptions-describe-first) MODEL=standard; INCLUDE_DESCRIPTIONS=0 ;;
+            wide-flat-no-descriptions) MODEL=wide_flat; INCLUDE_DESCRIPTIONS=0 ;;
+            wide-flat-with-descriptions) MODEL=wide_flat; INCLUDE_DESCRIPTIONS=1 ;;
+            wide-flat-with-descriptions-describe-first) MODEL=wide_flat; INCLUDE_DESCRIPTIONS=1 ;;
+            wide-flat-no-descriptions-describe-first) MODEL=wide_flat; INCLUDE_DESCRIPTIONS=0 ;;
+            clickhouse-best-practice-no-descriptions) MODEL=clickhouse_best_practice; INCLUDE_DESCRIPTIONS=0 ;;
+            clickhouse-best-practice-with-descriptions) MODEL=clickhouse_best_practice; INCLUDE_DESCRIPTIONS=1 ;;
+            clickhouse-best-practice-with-descriptions-describe-first) MODEL=clickhouse_best_practice; INCLUDE_DESCRIPTIONS=1 ;;
+            clickhouse-best-practice-no-descriptions-describe-first) MODEL=clickhouse_best_practice; INCLUDE_DESCRIPTIONS=0 ;;
+            *)
+              echo "Unknown AXP_VARIANT_ID: ${AXP_VARIANT_ID:-<unset>}" >&2
+              exit 2
+              ;;
+          esac
+          MODEL="$MODEL" INCLUDE_DESCRIPTIONS="$INCLUDE_DESCRIPTIONS" python3 - <<'PY'
+          import json
+          import os
+          import random
+          import sqlite3
+          from collections import defaultdict
+          from datetime import date, timedelta
+          from pathlib import Path
+
+          model = os.environ["MODEL"]
+          include_descriptions = os.environ["INCLUDE_DESCRIPTIONS"] == "1"
+          rng = random.Random(51442)
+
+          root = Path("/srv/db-design-efficiency")
+          root.mkdir(parents=True, exist_ok=True)
+          db_path = root / "crm.db"
+          if db_path.exists():
+              db_path.unlink()
+
+          def pick_weighted(options):
+              vals = [v for v, _ in options]
+              weights = [w for _, w in options]
+              return rng.choices(vals, weights=weights, k=1)[0]
+
+          def random_date(start, end):
+              return start + timedelta(days=rng.randint(0, (end - start).days))
+
+          customers = []
+          segments = [("SMB", 0.5), ("Mid-Market", 0.3), ("Enterprise", 0.2)]
+          regions = [("north_america", 0.36), ("europe", 0.28), ("asia_pacific", 0.24), ("latin_america", 0.12)]
+          statuses = [("active", 0.86), ("trial", 0.07), ("churned", 0.07)]
+          for idx in range(1, 241):
+              customers.append(
+                  {
+                      "customer_id": f"C{idx:04d}",
+                      "customer_name": f"Customer {idx:04d}",
+                      "segment": pick_weighted(segments),
+                      "region": pick_weighted(regions),
+                      "status": pick_weighted(statuses),
+                      "signup_date": random_date(date(2023, 1, 1), date(2025, 6, 30)),
+                  }
+              )
+
+          categories = {
+              "hardware": ["edge_gateway", "scanner", "sensor", "tablet"],
+              "software": ["analytics_suite", "crm_module", "billing_extension", "forecast_engine"],
+              "accessories": ["mount_kit", "dock", "power_supply", "spare_cable"],
+              "services": ["onboarding", "priority_support", "training", "data_migration"],
+          }
+          products = []
+          product_idx = 1
+          for category, subs in categories.items():
+              for sub in subs:
+                  for _ in range(8):
+                      list_price = rng.randint(3500, 65000)
+                      margin = rng.uniform(0.22, 0.48)
+                      products.append(
+                          {
+                              "product_id": f"P{product_idx:04d}",
+                              "sku": f"{category[:3].upper()}-{sub[:3].upper()}-{product_idx:04d}",
+                              "category": category,
+                              "subcategory": sub,
+                              "supplier_tier": pick_weighted([("tier_1", 0.4), ("tier_2", 0.4), ("tier_3", 0.2)]),
+                              "list_price_cents": list_price,
+                              "unit_cost_cents": int(list_price * (1 - margin)),
+                          }
+                      )
+                      product_idx += 1
+
+          customer_ids = [c["customer_id"] for c in customers]
+          customer_weights = [1.7 if c["status"] == "active" else 0.6 for c in customers]
+          orders = []
+          lines = []
+          line_id = 1
+          for order_num in range(1, 3001):
+              customer_id = rng.choices(customer_ids, weights=customer_weights, k=1)[0]
+              order = {
+                  "order_id": f"O{order_num:05d}",
+                  "customer_id": customer_id,
+                  "order_date": random_date(date(2025, 1, 1), date(2025, 12, 31)),
+                  "order_status": pick_weighted([("completed", 0.88), ("returned", 0.07), ("cancelled", 0.05)]),
+                  "channel": pick_weighted([("online", 0.58), ("sales_rep", 0.27), ("partner", 0.15)]),
+                  "payment_type": pick_weighted([("card", 0.46), ("invoice", 0.44), ("wire", 0.10)]),
+              }
+              orders.append(order)
+              for _ in range(rng.randint(2, 5)):
+                  product = products[rng.randrange(len(products))]
+                  discount_pct = pick_weighted([(0, 0.4), (5, 0.2), (10, 0.2), (15, 0.13), (20, 0.07)])
+                  lines.append(
+                      {
+                          "line_id": line_id,
+                          "order_id": order["order_id"],
+                          "product_id": product["product_id"],
+                          "quantity": rng.randint(1, 9),
+                          "unit_price_cents": max(500, int(product["list_price_cents"] * (100 - discount_pct) / 100)),
+                          "discount_pct": discount_pct,
+                          "is_promo": 1 if discount_pct >= 10 else 0,
+                      }
+                  )
+                  line_id += 1
+
+          order_by_id = {o["order_id"]: o for o in orders}
+          refunds = []
+          refund_id = 1
+          for l in lines:
+              order = order_by_id[l["order_id"]]
+              if order["order_status"] != "completed":
+                  continue
+              if rng.random() < 0.14:
+                  gross = l["quantity"] * l["unit_price_cents"]
+                  refund_ratio = rng.choice([0.25, 0.5, 1.0])
+                  refund_date = min(
+                      date(2025, 12, 31),
+                      order["order_date"] + timedelta(days=rng.randint(1, 45)),
+                  )
+                  refunds.append(
+                      {
+                          "refund_id": f"R{refund_id:06d}",
+                          "order_id": l["order_id"],
+                          "line_id": l["line_id"],
+                          "product_id": l["product_id"],
+                          "customer_id": order["customer_id"],
+                          "refund_date": refund_date,
+                          "refund_cents": int(gross * refund_ratio),
+                          "refund_reason": pick_weighted(
+                              [
+                                  ("product_issue", 0.34),
+                                  ("customer_remorse", 0.31),
+                                  ("billing_adjustment", 0.20),
+                                  ("shipping_delay", 0.15),
+                              ]
+                          ),
+                      }
+                  )
+                  refund_id += 1
+
+          inventories = []
+          for product in products:
+              on_hand = rng.randint(15, 420)
+              reorder = rng.randint(25, 140)
+              if rng.random() < 0.18:
+                  on_hand = max(3, reorder - rng.randint(1, 30))
+              inventories.append(
+                  {
+                      "product_id": product["product_id"],
+                      "on_hand_qty": on_hand,
+                      "reorder_point": reorder,
+                      "last_restock_date": random_date(date(2025, 8, 1), date(2025, 12, 31)),
+                  }
+              )
+
+          conn = sqlite3.connect(db_path)
+          try:
+              if model == "standard":
+                  conn.executescript(
+                      """
+                      CREATE TABLE customers (customer_id TEXT PRIMARY KEY, customer_name TEXT NOT NULL, segment TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL, signup_date TEXT NOT NULL);
+                      CREATE TABLE products (product_id TEXT PRIMARY KEY, sku TEXT NOT NULL, category TEXT NOT NULL, subcategory TEXT NOT NULL, supplier_tier TEXT NOT NULL, list_price_cents INTEGER NOT NULL, unit_cost_cents INTEGER NOT NULL);
+                      CREATE TABLE orders (order_id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, order_date TEXT NOT NULL, order_status TEXT NOT NULL, channel TEXT NOT NULL, payment_type TEXT NOT NULL);
+                      CREATE TABLE order_items (line_id INTEGER PRIMARY KEY, order_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price_cents INTEGER NOT NULL, discount_pct INTEGER NOT NULL, is_promo INTEGER NOT NULL);
+                      CREATE TABLE refund_items (refund_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, line_id INTEGER NOT NULL, product_id TEXT NOT NULL, customer_id TEXT NOT NULL, refund_date TEXT NOT NULL, refund_cents INTEGER NOT NULL, refund_reason TEXT NOT NULL);
+                      CREATE TABLE inventory (product_id TEXT PRIMARY KEY, on_hand_qty INTEGER NOT NULL, reorder_point INTEGER NOT NULL, last_restock_date TEXT NOT NULL);
+                      CREATE INDEX idx_orders_date_status ON orders(order_date, order_status, customer_id);
+                      CREATE INDEX idx_order_items_order ON order_items(order_id, product_id);
+                      CREATE INDEX idx_refunds_date_product ON refund_items(refund_date, product_id, customer_id);
+                      CREATE INDEX idx_customers_region_status ON customers(region, status, segment);
+                      CREATE INDEX idx_inventory_reorder ON inventory(reorder_point, on_hand_qty);
+                      """
+                  )
+                  conn.executemany("INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?)", [(c["customer_id"], c["customer_name"], c["segment"], c["region"], c["status"], c["signup_date"].isoformat()) for c in customers])
+                  conn.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", [(p["product_id"], p["sku"], p["category"], p["subcategory"], p["supplier_tier"], p["list_price_cents"], p["unit_cost_cents"]) for p in products])
+                  conn.executemany("INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?)", [(o["order_id"], o["customer_id"], o["order_date"].isoformat(), o["order_status"], o["channel"], o["payment_type"]) for o in orders])
+                  conn.executemany("INSERT INTO order_items VALUES (?, ?, ?, ?, ?, ?, ?)", [(l["line_id"], l["order_id"], l["product_id"], l["quantity"], l["unit_price_cents"], l["discount_pct"], l["is_promo"]) for l in lines])
+                  conn.executemany(
+                      "INSERT INTO refund_items VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      [
+                          (
+                              r["refund_id"],
+                              r["order_id"],
+                              r["line_id"],
+                              r["product_id"],
+                              r["customer_id"],
+                              r["refund_date"].isoformat(),
+                              r["refund_cents"],
+                              r["refund_reason"],
+                          )
+                          for r in refunds
+                      ],
+                  )
+                  conn.executemany("INSERT INTO inventory VALUES (?, ?, ?, ?)", [(i["product_id"], i["on_hand_qty"], i["reorder_point"], i["last_restock_date"].isoformat()) for i in inventories])
+              elif model == "wide_flat":
+                  conn.executescript(
+                      """
+                      CREATE TABLE sales_wide (
+                        order_id TEXT NOT NULL, line_id INTEGER NOT NULL, order_date TEXT NOT NULL, order_status TEXT NOT NULL, channel TEXT NOT NULL, payment_type TEXT NOT NULL,
+                        customer_id TEXT NOT NULL, customer_name TEXT NOT NULL, customer_segment TEXT NOT NULL, customer_region TEXT NOT NULL, customer_status TEXT NOT NULL, customer_signup_date TEXT NOT NULL,
+                        product_id TEXT NOT NULL, sku TEXT NOT NULL, product_category TEXT NOT NULL, product_subcategory TEXT NOT NULL, supplier_tier TEXT NOT NULL,
+                        quantity INTEGER NOT NULL, unit_price_cents INTEGER NOT NULL, discount_pct INTEGER NOT NULL, is_promo INTEGER NOT NULL, line_revenue_cents INTEGER NOT NULL,
+                        refund_date TEXT NOT NULL, refunded_cents INTEGER NOT NULL, on_hand_qty INTEGER NOT NULL, reorder_point INTEGER NOT NULL, last_restock_date TEXT NOT NULL
+                      );
+                      CREATE INDEX idx_sales_wide_order_date ON sales_wide(order_date, order_status);
+                      CREATE INDEX idx_sales_wide_customer ON sales_wide(customer_id, customer_segment, customer_region);
+                      CREATE INDEX idx_sales_wide_product ON sales_wide(product_id, product_category, product_subcategory);
+                      CREATE INDEX idx_sales_wide_stock ON sales_wide(reorder_point, on_hand_qty);
+                      """
+                  )
+                  c_by_id = {c["customer_id"]: c for c in customers}
+                  p_by_id = {p["product_id"]: p for p in products}
+                  o_by_id = {o["order_id"]: o for o in orders}
+                  i_by_id = {i["product_id"]: i for i in inventories}
+                  refund_by_line_id = {r["line_id"]: r for r in refunds}
+                  payload = []
+                  for l in lines:
+                      o = o_by_id[l["order_id"]]
+                      c = c_by_id[o["customer_id"]]
+                      p = p_by_id[l["product_id"]]
+                      inv = i_by_id[l["product_id"]]
+                      refund = refund_by_line_id.get(l["line_id"])
+                      payload.append((o["order_id"], l["line_id"], o["order_date"].isoformat(), o["order_status"], o["channel"], o["payment_type"], c["customer_id"], c["customer_name"], c["segment"], c["region"], c["status"], c["signup_date"].isoformat(), p["product_id"], p["sku"], p["category"], p["subcategory"], p["supplier_tier"], l["quantity"], l["unit_price_cents"], l["discount_pct"], l["is_promo"], l["quantity"] * l["unit_price_cents"], (refund["refund_date"].isoformat() if refund else ""), (refund["refund_cents"] if refund else 0), inv["on_hand_qty"], inv["reorder_point"], inv["last_restock_date"].isoformat()))
+                  conn.executemany("INSERT INTO sales_wide VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", payload)
+              else:
+                  conn.executescript(
+                      """
+                      CREATE TABLE dim_customer (customer_sk INTEGER PRIMARY KEY, customer_id TEXT NOT NULL UNIQUE, segment TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL, signup_date TEXT NOT NULL);
+                      CREATE TABLE dim_product (product_sk INTEGER PRIMARY KEY, product_id TEXT NOT NULL UNIQUE, category TEXT NOT NULL, subcategory TEXT NOT NULL, supplier_tier TEXT NOT NULL, list_price_cents INTEGER NOT NULL, unit_cost_cents INTEGER NOT NULL);
+                      CREATE TABLE fact_sales (
+                        event_date TEXT NOT NULL, order_id TEXT NOT NULL, line_id INTEGER NOT NULL, customer_sk INTEGER NOT NULL, product_sk INTEGER NOT NULL,
+                        channel TEXT NOT NULL, payment_type TEXT NOT NULL, order_status TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price_cents INTEGER NOT NULL,
+                        discount_pct INTEGER NOT NULL, is_promo INTEGER NOT NULL, line_revenue_cents INTEGER NOT NULL
+                      );
+                      CREATE TABLE fact_refunds (
+                        refund_date TEXT NOT NULL, refund_id TEXT NOT NULL, order_id TEXT NOT NULL, line_id INTEGER NOT NULL,
+                        customer_sk INTEGER NOT NULL, product_sk INTEGER NOT NULL, refund_cents INTEGER NOT NULL, refund_reason TEXT NOT NULL
+                      );
+                      CREATE TABLE inventory_snapshot (product_sk INTEGER PRIMARY KEY, on_hand_qty INTEGER NOT NULL, reorder_point INTEGER NOT NULL, last_restock_date TEXT NOT NULL);
+                      CREATE INDEX idx_fact_sales_ordered ON fact_sales(order_status, event_date, customer_sk, product_sk);
+                      CREATE INDEX idx_fact_sales_product_date ON fact_sales(product_sk, event_date, is_promo);
+                      CREATE INDEX idx_fact_refunds_date ON fact_refunds(refund_date, product_sk, customer_sk);
+                      CREATE INDEX idx_dim_customer_filters ON dim_customer(region, status, segment);
+                      CREATE INDEX idx_dim_product_filters ON dim_product(category, subcategory, supplier_tier);
+                      CREATE INDEX idx_inventory_snapshot_reorder ON inventory_snapshot(reorder_point, on_hand_qty);
+                      """
+                  )
+                  conn.executemany("INSERT INTO dim_customer VALUES (?, ?, ?, ?, ?, ?)", [(i, c["customer_id"], c["segment"], c["region"], c["status"], c["signup_date"].isoformat()) for i, c in enumerate(customers, start=1)])
+                  conn.executemany("INSERT INTO dim_product VALUES (?, ?, ?, ?, ?, ?, ?)", [(i, p["product_id"], p["category"], p["subcategory"], p["supplier_tier"], p["list_price_cents"], p["unit_cost_cents"]) for i, p in enumerate(products, start=1)])
+                  c_sk = {c["customer_id"]: i for i, c in enumerate(customers, start=1)}
+                  p_sk = {p["product_id"]: i for i, p in enumerate(products, start=1)}
+                  o_by_id = {o["order_id"]: o for o in orders}
+                  conn.executemany("INSERT INTO fact_sales VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [(o_by_id[l["order_id"]]["order_date"].isoformat(), l["order_id"], l["line_id"], c_sk[o_by_id[l["order_id"]]["customer_id"]], p_sk[l["product_id"]], o_by_id[l["order_id"]]["channel"], o_by_id[l["order_id"]]["payment_type"], o_by_id[l["order_id"]]["order_status"], l["quantity"], l["unit_price_cents"], l["discount_pct"], l["is_promo"], l["quantity"] * l["unit_price_cents"]) for l in lines])
+                  conn.executemany(
+                      "INSERT INTO fact_refunds VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      [
+                          (
+                              r["refund_date"].isoformat(),
+                              r["refund_id"],
+                              r["order_id"],
+                              r["line_id"],
+                              c_sk[r["customer_id"]],
+                              p_sk[r["product_id"]],
+                              r["refund_cents"],
+                              r["refund_reason"],
+                          )
+                          for r in refunds
+                      ],
+                  )
+                  inv_payload = [(p_sk[i["product_id"]], i["on_hand_qty"], i["reorder_point"], i["last_restock_date"].isoformat()) for i in inventories]
+                  conn.executemany("INSERT INTO inventory_snapshot VALUES (?, ?, ?, ?)", inv_payload)
+
+              if include_descriptions:
+                  conn.execute(
+                      "CREATE TABLE column_descriptions ("
+                      "table_name TEXT NOT NULL, "
+                      "column_name TEXT NOT NULL, "
+                      "description TEXT NOT NULL, "
+                      "related_fields TEXT NOT NULL, "
+                      "metric_usage TEXT NOT NULL, "
+                      "PRIMARY KEY (table_name, column_name)"
+                      ")"
+                  )
+                  if model == "standard":
+                      desc = [
+                          (
+                              "customers",
+                              "segment",
+                              "Commercial segment label: SMB, Mid-Market, Enterprise.",
+                              "customers.customer_id joins to orders.customer_id for customer-level order rollups.",
+                              "Filter segment='Enterprise' for q5_avg_enterprise_order_value_cents.",
+                          ),
+                          (
+                              "customers",
+                              "status",
+                              "Lifecycle status for customer account.",
+                              "customers.customer_id joins to orders.customer_id.",
+                              "Use status='active' in q2_active_north_america_customers and q7_active_customers_without_completed_orders_last_90_days.",
+                          ),
+                          (
+                              "orders",
+                              "order_status",
+                              "Order outcome: completed, returned, cancelled.",
+                              "orders.order_id joins to order_items.order_id; orders.customer_id joins to customers.customer_id.",
+                              "Most revenue metrics (q3/q4/q5/q6/q8/q9/q10) should restrict to order_status='completed'.",
+                          ),
+                          (
+                              "orders",
+                              "order_date",
+                              "Calendar date for the order event.",
+                              "Used with orders.order_id for date-window filtering before joining order_items.",
+                              "Apply date windows: last 30/90/180 days and month rollups for q3/q4/q6/q7/q8/q9/q10.",
+                          ),
+                          (
+                              "order_items",
+                              "line_id",
+                              "Unique line identifier inside an order.",
+                              "order_items.line_id links to refund_items.line_id when mapping refunded sales lines.",
+                              "Use line-level linkage when validating net revenue logic for q3.",
+                          ),
+                          (
+                              "order_items",
+                              "is_promo",
+                              "Promo flag: 1 when discount_pct >= 10.",
+                              "Combine with quantity and unit_price_cents on order_items.",
+                              "Numerator selector for q9_promo_revenue_share_last_180_days_pct.",
+                          ),
+                          (
+                              "refund_items",
+                              "refund_cents",
+                              "Refund amount posted for a sold line.",
+                              "refund_items.line_id ties back to order_items.line_id; refund_items.refund_date defines posting window.",
+                              "Subtract from completed-order gross sales for q3_net_revenue_last_30_days_cents.",
+                          ),
+                          (
+                              "refund_items",
+                              "refund_date",
+                              "Date the refund was posted.",
+                              "Couple with refund_cents and line_id to align refund timing against sales windows.",
+                              "Use refund_date window filter for q3 (same 30-day period as gross sales).",
+                          ),
+                          (
+                              "inventory",
+                              "reorder_point",
+                              "Minimum stock threshold before replenishment.",
+                              "inventory.product_id aligns with order_items.product_id for sold-quantity comparisons.",
+                              "q8 counts products where on_hand_qty <= reorder_point and recent sold quantity >= 15.",
+                          ),
+                      ]
+                  elif model == "wide_flat":
+                      desc = [
+                          (
+                              "sales_wide",
+                              "customer_segment",
+                              "Commercial segment copied into each line row.",
+                              "Same row also carries order_status/order_date/line_revenue_cents for direct aggregations without joins.",
+                              "Filter customer_segment='Enterprise' for q5.",
+                          ),
+                          (
+                              "sales_wide",
+                              "customer_status",
+                              "Customer lifecycle state denormalized onto each line.",
+                              "Pair with customer_region and customer_id from same row grain.",
+                              "Use customer_status='active' for q2 and q7 customer-level filters.",
+                          ),
+                          (
+                              "sales_wide",
+                              "order_status",
+                              "Order outcome at line grain.",
+                              "Same row contains line_revenue_cents, refunded_cents, refund_date.",
+                              "Restrict to order_status='completed' for sales-side metrics q3/q4/q5/q6/q8/q9/q10.",
+                          ),
+                          (
+                              "sales_wide",
+                              "order_date",
+                              "Order event date per line.",
+                              "Use with order_status and line_revenue_cents in same row.",
+                              "Primary date window for q3/q4/q6/q7/q8/q9/q10.",
+                          ),
+                          (
+                              "sales_wide",
+                              "is_promo",
+                              "Promo flag copied at line grain.",
+                              "Combine with line_revenue_cents in same row.",
+                              "Numerator selector for q9 promo revenue share.",
+                          ),
+                          (
+                              "sales_wide",
+                              "line_revenue_cents",
+                              "Gross line revenue: quantity * unit_price_cents.",
+                              "Pair with refunded_cents for net logic and with is_promo for promo share.",
+                              "Used by q3/q4/q5/q6/q9 calculations.",
+                          ),
+                          (
+                              "sales_wide",
+                              "refund_date",
+                              "Refund posting date; empty string means no refund posted for that line.",
+                              "Use with refunded_cents from same line row.",
+                              "Apply same 30-day window as order_date-based gross sales when computing q3.",
+                          ),
+                          (
+                              "sales_wide",
+                              "refunded_cents",
+                              "Refund amount to subtract from gross line revenue for net metrics.",
+                              "Same-row companion to line_revenue_cents and refund_date.",
+                              "Subtract from gross windowed sales for q3.",
+                          ),
+                          (
+                              "sales_wide",
+                              "reorder_point",
+                              "Stock threshold copied per product line.",
+                              "Compare against on_hand_qty and aggregate sold quantity by product_id.",
+                              "q8 stockout risk uses on_hand_qty <= reorder_point and recent sold quantity >= 15.",
+                          ),
+                      ]
+                  else:
+                      desc = [
+                          (
+                              "fact_sales",
+                              "customer_sk",
+                              "Surrogate customer key in sales fact.",
+                              "Join fact_sales.customer_sk to dim_customer.customer_sk.",
+                              "Use customer attributes (status/region/segment) via dim_customer for q2/q5/q7/q10.",
+                          ),
+                          (
+                              "fact_sales",
+                              "product_sk",
+                              "Surrogate product key in sales fact.",
+                              "Join fact_sales.product_sk to dim_product.product_sk and inventory_snapshot.product_sk.",
+                              "Use for q4 top product and q8 product-level sold quantity.",
+                          ),
+                          (
+                              "fact_sales",
+                              "order_status",
+                              "Order outcome captured at fact line grain.",
+                              "Filter in fact_sales before joining dimensions where possible.",
+                              "Most sales metrics use order_status='completed' (q3/q4/q5/q6/q8/q9/q10).",
+                          ),
+                          (
+                              "fact_sales",
+                              "event_date",
+                              "Order event date used for time filtering.",
+                              "Use with order_status in fact_sales for windowing.",
+                              "Applies to q3/q4/q6/q7/q8/q9/q10 date windows.",
+                          ),
+                          (
+                              "fact_sales",
+                              "line_revenue_cents",
+                              "Revenue contribution for one sold line.",
+                              "Combine with is_promo in fact_sales and subtract fact_refunds.refund_cents for net revenue.",
+                              "Core measure for q3/q4/q5/q6/q9.",
+                          ),
+                          (
+                              "fact_sales",
+                              "is_promo",
+                              "Promotion flag for discounted lines.",
+                              "Pair with line_revenue_cents at same fact grain.",
+                              "Numerator selector for q9 promo revenue share.",
+                          ),
+                          (
+                              "fact_refunds",
+                              "refund_cents",
+                              "Refund amount associated with a sold line item.",
+                              "Align by line_id/order_id with sales lines; use refund_date window for period alignment.",
+                              "Subtract from gross sales for q3 net revenue.",
+                          ),
+                          (
+                              "fact_refunds",
+                              "refund_date",
+                              "Date when refund was recorded.",
+                              "Filter fact_refunds by refund_date; aggregate refund_cents for period subtraction.",
+                              "Use last-30-day refund window in q3.",
+                          ),
+                          (
+                              "dim_customer",
+                              "region",
+                              "Geographic sales region.",
+                              "Join dim_customer.customer_sk to fact_sales.customer_sk.",
+                              "q2 filters region='north_america'; q7 also depends on active customer region/status context.",
+                          ),
+                          (
+                              "dim_product",
+                              "product_id",
+                              "Business product identifier used in final answers.",
+                              "Join dim_product.product_sk to fact_sales.product_sk.",
+                              "q4 returns product_id after ranking by revenue.",
+                          ),
+                          (
+                              "inventory_snapshot",
+                              "reorder_point",
+                              "Threshold triggering replenishment.",
+                              "Join inventory_snapshot.product_sk to fact_sales.product_sk to pair stock with demand.",
+                              "q8 counts product_sk with on_hand_qty <= reorder_point and recent sold quantity >= 15.",
+                          ),
+                      ]
+                  conn.executemany("INSERT INTO column_descriptions VALUES (?, ?, ?, ?, ?)", desc)
+
+              conn.commit()
+          finally:
+              conn.close()
+
+          customer_by_id = {c["customer_id"]: c for c in customers}
+          order_by_id = {o["order_id"]: o for o in orders}
+          max_day = date(2025, 12, 31)
+          day_30 = max_day - timedelta(days=29)
+          day_90 = max_day - timedelta(days=89)
+          day_180 = max_day - timedelta(days=179)
+          completed_lines = [l for l in lines if order_by_id[l["order_id"]]["order_status"] == "completed"]
+
+          q1 = len(customers)
+          q2 = sum(1 for c in customers if c["status"] == "active" and c["region"] == "north_america")
+          gross_last_30 = sum(
+              l["quantity"] * l["unit_price_cents"]
+              for l in completed_lines
+              if order_by_id[l["order_id"]]["order_date"] >= day_30
+          )
+          refunds_last_30 = sum(r["refund_cents"] for r in refunds if r["refund_date"] >= day_30)
+          q3 = gross_last_30 - refunds_last_30
+
+          rev_by_product = defaultdict(int)
+          for l in completed_lines:
+              if order_by_id[l["order_id"]]["order_date"] >= day_90:
+                  rev_by_product[l["product_id"]] += l["quantity"] * l["unit_price_cents"]
+          q4 = sorted(rev_by_product.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+          enterprise_totals = defaultdict(int)
+          for l in completed_lines:
+              o = order_by_id[l["order_id"]]
+              if customer_by_id[o["customer_id"]]["segment"] == "Enterprise":
+                  enterprise_totals[o["order_id"]] += l["quantity"] * l["unit_price_cents"]
+          q5 = int(round(sum(enterprise_totals.values()) / max(1, len(enterprise_totals))))
+
+          monthly = defaultdict(int)
+          for l in completed_lines:
+              d = order_by_id[l["order_id"]]["order_date"]
+              monthly[f"{d.year:04d}-{d.month:02d}"] += l["quantity"] * l["unit_price_cents"]
+          q6 = sorted(monthly.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+          completed_customers_90 = {
+              order_by_id[l["order_id"]]["customer_id"]
+              for l in completed_lines
+              if order_by_id[l["order_id"]]["order_date"] >= day_90
+          }
+          q7 = sum(1 for c in customers if c["status"] == "active" and c["customer_id"] not in completed_customers_90)
+
+          sold_qty_30 = defaultdict(int)
+          for l in completed_lines:
+              if order_by_id[l["order_id"]]["order_date"] >= day_30:
+                  sold_qty_30[l["product_id"]] += l["quantity"]
+          inv_by_product = {i["product_id"]: i for i in inventories}
+          q8 = sum(1 for p in products if inv_by_product[p["product_id"]]["on_hand_qty"] <= inv_by_product[p["product_id"]]["reorder_point"] and sold_qty_30[p["product_id"]] >= 15)
+
+          promo_revenue = 0
+          total_revenue_180 = 0
+          for l in completed_lines:
+              if order_by_id[l["order_id"]]["order_date"] >= day_180:
+                  rev = l["quantity"] * l["unit_price_cents"]
+                  total_revenue_180 += rev
+                  if l["is_promo"] == 1:
+                      promo_revenue += rev
+          q9 = round((promo_revenue / max(1, total_revenue_180)) * 100.0, 2)
+
+          completed_dates_by_customer = defaultdict(list)
+          for o in orders:
+              if o["order_status"] == "completed":
+                  completed_dates_by_customer[o["customer_id"]].append(o["order_date"])
+          q10 = 0
+          for dates in completed_dates_by_customer.values():
+              dates.sort()
+              if len(dates) >= 2 and (dates[1] - dates[0]).days <= 60:
+                  q10 += 1
+
+          expected = {
+              "q1_total_customers": q1,
+              "q2_active_north_america_customers": q2,
+              "q3_net_revenue_last_30_days_cents": q3,
+              "q4_top_product_id_by_revenue_last_90_days": q4,
+              "q5_avg_enterprise_order_value_cents": q5,
+              "q6_best_revenue_month": q6,
+              "q7_active_customers_without_completed_orders_last_90_days": q7,
+              "q8_stockout_risk_products": q8,
+              "q9_promo_revenue_share_last_180_days_pct": q9,
+              "q10_repeat_buyers_within_60_days": q10,
+              "q11_best_campaign_roi_2025": "INSUFFICIENT_DATA",
+          }
+          root.joinpath("expected-answers.json").write_text(json.dumps(expected, indent=2, sort_keys=True))
+
+          schema_note = {
+              "standard": "Schema style: normalized OLTP-like model with customer, product, order, order_items, refund_items, and inventory tables.",
+              "wide_flat": "Schema style: one denormalized wide sales table (`sales_wide`) containing customer/product/order/inventory attributes plus refund_date and refunded_cents.",
+              "clickhouse_best_practice": "Schema style: analytics-focused star model with `fact_sales`, `fact_refunds`, dimensions, and inventory snapshot.",
+          }[model]
+          desc_note = (
+              "Semantic column descriptions are available in `column_descriptions` (description + related_fields + metric_usage)."
+              if include_descriptions
+              else "No explicit column description table is provided in this variant."
+          )
+          root.joinpath("README.md").write_text(
+              "# Database design efficiency benchmark\n\n"
+              "This benchmark measures how efficiently an agent can answer analytics questions over a realistic CRM + inventory + sales dataset.\n\n"
+              f"{schema_note}\n{desc_note}\n\n"
+              "ClickHouse local path: `/srv/db-design-efficiency/chdb`\n\n"
+              "Use SQL with ClickHouse local (`clickhouse local --path /srv/db-design-efficiency/chdb --query \"<SQL>\"`) to answer the questions listed in `/srv/db-design-efficiency/query-questions.md`.\n"
+          )
+          root.joinpath("query-questions.md").write_text(
+              "# Query questions\n\n"
+              "Return answers for these keys:\n\n"
+              "1. `q1_total_customers`: count all customers.\n"
+              "2. `q2_active_north_america_customers`: count customers where status='active' and region='north_america'.\n"
+              "3. `q3_net_revenue_last_30_days_cents`: net revenue for the last 30 days of 2025, defined as completed-order gross sales (`quantity * unit_price_cents`) minus refunds posted in the same period.\n"
+              "4. `q4_top_product_id_by_revenue_last_90_days`: product_id with highest completed-order revenue in the last 90 days of 2025.\n"
+              "5. `q5_avg_enterprise_order_value_cents`: average completed order total for Enterprise customers, rounded to nearest integer.\n"
+              "6. `q6_best_revenue_month`: month (YYYY-MM) with highest completed-order revenue.\n"
+              "7. `q7_active_customers_without_completed_orders_last_90_days`: active customers with zero completed orders in the last 90 days of 2025.\n"
+              "8. `q8_stockout_risk_products`: integer count of products where on_hand_qty <= reorder_point and completed-order sold quantity in the last 30 days is >= 15.\n"
+              "9. `q9_promo_revenue_share_last_180_days_pct`: percentage of completed-order revenue from promo lines (`is_promo=1`) in the last 180 days of 2025; round to 2 decimals.\n"
+              "10. `q10_repeat_buyers_within_60_days`: customers whose second completed order occurs within 60 days of their first completed order.\n"
+              "11. `q11_best_campaign_roi_2025`: campaign_id with highest 2025 ROI where ROI = (campaign-attributed revenue - campaign spend) / campaign spend.\n"
+          )
+          PY
+          MODEL="$MODEL" INCLUDE_DESCRIPTIONS="$INCLUDE_DESCRIPTIONS" python3 - <<'PY'
+          import json
+          import os
+          import sqlite3
+          import subprocess
+
+          model = os.environ["MODEL"]
+          include_descriptions = os.environ["INCLUDE_DESCRIPTIONS"] == "1"
+          sqlite_db_path = "/srv/db-design-efficiency/crm.db"
+          clickhouse_path = "/srv/db-design-efficiency/chdb"
+          clickhouse = "/usr/local/bin/clickhouse"
+
+          table_sets = {
+              "standard": ["customers", "products", "orders", "order_items", "refund_items", "inventory"],
+              "wide_flat": ["sales_wide"],
+              "clickhouse_best_practice": [
+                  "dim_customer",
+                  "dim_product",
+                  "fact_sales",
+                  "fact_refunds",
+                  "inventory_snapshot",
+              ],
+          }
+          table_ddls = {
+              "customers": "CREATE TABLE customers (customer_id String, customer_name String, segment LowCardinality(String), region LowCardinality(String), status LowCardinality(String), signup_date Date) ENGINE = MergeTree ORDER BY (status, region, customer_id)",
+              "products": "CREATE TABLE products (product_id String, sku String, category LowCardinality(String), subcategory LowCardinality(String), supplier_tier LowCardinality(String), list_price_cents UInt32, unit_cost_cents UInt32) ENGINE = MergeTree ORDER BY (category, subcategory, product_id)",
+              "orders": "CREATE TABLE orders (order_id String, customer_id String, order_date Date, order_status LowCardinality(String), channel LowCardinality(String), payment_type LowCardinality(String)) ENGINE = MergeTree ORDER BY (order_status, order_date, customer_id, order_id)",
+              "order_items": "CREATE TABLE order_items (line_id UInt32, order_id String, product_id String, quantity UInt16, unit_price_cents UInt32, discount_pct UInt8, is_promo UInt8) ENGINE = MergeTree ORDER BY (product_id, line_id)",
+              "refund_items": "CREATE TABLE refund_items (refund_id String, order_id String, line_id UInt32, product_id String, customer_id String, refund_date Date, refund_cents UInt64, refund_reason LowCardinality(String)) ENGINE = MergeTree ORDER BY (refund_date, product_id, customer_id, refund_id)",
+              "inventory": "CREATE TABLE inventory (product_id String, on_hand_qty UInt16, reorder_point UInt16, last_restock_date Date) ENGINE = MergeTree ORDER BY (product_id)",
+              "sales_wide": "CREATE TABLE sales_wide (order_id String, line_id UInt32, order_date Date, order_status LowCardinality(String), channel LowCardinality(String), payment_type LowCardinality(String), customer_id String, customer_name String, customer_segment LowCardinality(String), customer_region LowCardinality(String), customer_status LowCardinality(String), customer_signup_date Date, product_id String, sku String, product_category LowCardinality(String), product_subcategory LowCardinality(String), supplier_tier LowCardinality(String), quantity UInt16, unit_price_cents UInt32, discount_pct UInt8, is_promo UInt8, line_revenue_cents UInt64, refund_date String, refunded_cents UInt64, on_hand_qty UInt16, reorder_point UInt16, last_restock_date Date) ENGINE = MergeTree ORDER BY (order_status, order_date, customer_id, product_id, line_id)",
+              "dim_customer": "CREATE TABLE dim_customer (customer_sk UInt32, customer_id String, segment LowCardinality(String), region LowCardinality(String), status LowCardinality(String), signup_date Date) ENGINE = MergeTree ORDER BY (status, region, segment, customer_sk)",
+              "dim_product": "CREATE TABLE dim_product (product_sk UInt32, product_id String, category LowCardinality(String), subcategory LowCardinality(String), supplier_tier LowCardinality(String), list_price_cents UInt32, unit_cost_cents UInt32) ENGINE = MergeTree ORDER BY (category, subcategory, supplier_tier, product_sk)",
+              "fact_sales": "CREATE TABLE fact_sales (event_date Date, order_id String, line_id UInt32, customer_sk UInt32, product_sk UInt32, channel LowCardinality(String), payment_type LowCardinality(String), order_status LowCardinality(String), quantity UInt16, unit_price_cents UInt32, discount_pct UInt8, is_promo UInt8, line_revenue_cents UInt64) ENGINE = MergeTree ORDER BY (order_status, event_date, customer_sk, product_sk, line_id)",
+              "fact_refunds": "CREATE TABLE fact_refunds (refund_date Date, refund_id String, order_id String, line_id UInt32, customer_sk UInt32, product_sk UInt32, refund_cents UInt64, refund_reason LowCardinality(String)) ENGINE = MergeTree ORDER BY (refund_date, product_sk, customer_sk, refund_id)",
+              "inventory_snapshot": "CREATE TABLE inventory_snapshot (product_sk UInt32, on_hand_qty UInt16, reorder_point UInt16, last_restock_date Date) ENGINE = MergeTree ORDER BY (product_sk)",
+              "column_descriptions": "CREATE TABLE column_descriptions (table_name String, column_name String, description String, related_fields String, metric_usage String) ENGINE = MergeTree ORDER BY (table_name, column_name)",
+          }
+
+          selected_tables = list(table_sets[model])
+          if include_descriptions:
+              selected_tables.append("column_descriptions")
+
+          def run_clickhouse(query, payload=None):
+              subprocess.run(
+                  [clickhouse, "local", "--path", clickhouse_path, "--query", query],
+                  check=True,
+                  input=None if payload is None else payload.encode(),
+              )
+
+          for table in selected_tables:
+              run_clickhouse(f"DROP TABLE IF EXISTS {table}")
+          for table in selected_tables:
+              run_clickhouse(table_ddls[table])
+
+          conn = sqlite3.connect(sqlite_db_path)
+          conn.row_factory = sqlite3.Row
+          try:
+              for table in selected_tables:
+                  rows = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+                  if not rows:
+                      continue
+                  payload = "\n".join(json.dumps(row, separators=(",", ":")) for row in rows)
+                  run_clickhouse(f"INSERT INTO {table} FORMAT JSONEachRow", payload)
+          finally:
+              conn.close()
+          PY
+    - id: standard-with-descriptions
+      tag: standard-with-descriptions
+      overrides:
+        setup: *inline_dataset_setup
+    - id: wide-flat-no-descriptions
+      tag: wide-flat-no-descriptions
+      overrides:
+        setup: *inline_dataset_setup
+    - id: wide-flat-with-descriptions
+      tag: wide-flat-with-descriptions
+      overrides:
+        setup: *inline_dataset_setup
+    - id: clickhouse-best-practice-no-descriptions
+      tag: clickhouse-best-practice-no-descriptions
+      overrides:
+        setup: *inline_dataset_setup
+    - id: clickhouse-best-practice-with-descriptions
+      tag: clickhouse-best-practice-with-descriptions
+      overrides:
+        setup: *inline_dataset_setup
+    - id: standard-with-descriptions-describe-first
+      tag: standard-with-descriptions-describe-first
+      overrides:
+        setup: *inline_dataset_setup
+        prompt: &describe_first_prompt |
+          You are evaluating how efficiently an LLM can query a realistic business
+          dataset.
+
+          Read:
+          - `/srv/db-design-efficiency/README.md`
+          - `/srv/db-design-efficiency/query-questions.md`
+
+          Work from ClickHouse local path:
+          - `/srv/db-design-efficiency/chdb`
+
+          Requirements:
+          1. Use ClickHouse local for all data access and calculations.
+             Command shape:
+             `clickhouse local --path /srv/db-design-efficiency/chdb --query "<SQL>"`
+             If `column_descriptions` exists, use it as semantic guidance:
+             - `related_fields` explains join paths and field relationships.
+             - `metric_usage` explains how fields contribute to benchmark metrics.
+          2. Start with schema introspection before any metric query:
+             - run `SHOW TABLES`
+             - then run `DESCRIBE TABLE <table_name>` (or `DESCRIBE <table_name>`) for every table in this variant.
+             - if `column_descriptions` exists, include it in introspection too.
+          3. Answer all 11 questions in `/workspace/query-results.json`.
+          4. Write a concise SQL worklog to `/workspace/query-worklog.md` with each
+             query attempt and a short note for any SQL error.
+          5. In `query-results.json`, include exactly these keys:
+             - `q1_total_customers`
+             - `q2_active_north_america_customers`
+             - `q3_net_revenue_last_30_days_cents`
+             - `q4_top_product_id_by_revenue_last_90_days`
+             - `q5_avg_enterprise_order_value_cents`
+             - `q6_best_revenue_month`
+             - `q7_active_customers_without_completed_orders_last_90_days`
+             - `q8_stockout_risk_products`
+             - `q9_promo_revenue_share_last_180_days_pct`
+             - `q10_repeat_buyers_within_60_days`
+             - `q11_best_campaign_roi_2025`
+
+          Return values only (numbers/strings), no prose in JSON.
+          If a question cannot be answered from available tables/columns, set that key
+          to the exact string `INSUFFICIENT_DATA` and explain the blocker in the
+          worklog.
+          Stop once both required files are written.
+          The harness will also evaluate correctness and efficiency from trace data.
+    - id: standard-no-descriptions-describe-first
+      tag: standard-no-descriptions-describe-first
+      overrides:
+        setup: *inline_dataset_setup
+        prompt: *describe_first_prompt
+    - id: wide-flat-no-descriptions-describe-first
+      tag: wide-flat-no-descriptions-describe-first
+      overrides:
+        setup: *inline_dataset_setup
+        prompt: *describe_first_prompt
+    - id: clickhouse-best-practice-no-descriptions-describe-first
+      tag: clickhouse-best-practice-no-descriptions-describe-first
+      overrides:
+        setup: *inline_dataset_setup
+        prompt: *describe_first_prompt
+    - id: wide-flat-with-descriptions-describe-first
+      tag: wide-flat-with-descriptions-describe-first
+      overrides:
+        setup: *inline_dataset_setup
+        prompt: *describe_first_prompt
+    - id: clickhouse-best-practice-with-descriptions-describe-first
+      tag: clickhouse-best-practice-with-descriptions-describe-first
+      overrides:
+        setup: *inline_dataset_setup
+        prompt: *describe_first_prompt
+model: claude-sonnet-4-6
+agent: claude
+tests:
+  application:
+    - name: query-results-present
+      script: |
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        root = Path("/workspace")
+        result_path = root / "query-results.json"
+        expected_path = Path("/srv/db-design-efficiency/expected-answers.json")
+        if not result_path.is_file() or result_path.stat().st_size == 0:
+            raise SystemExit("query-results.json missing or empty")
+        if not expected_path.is_file():
+            raise SystemExit("expected-answers.json missing in scenario setup")
+
+        results = json.loads(result_path.read_text())
+        expected = json.loads(expected_path.read_text())
+
+        expected_keys = set(expected.keys())
+        result_keys = set(results.keys())
+        missing = sorted(expected_keys - result_keys)
+        extra = sorted(result_keys - expected_keys)
+        if missing or extra:
+            raise SystemExit(f"query-results keys mismatch: missing={missing} extra={extra}")
+
+        string_keys = {
+            "q4_top_product_id_by_revenue_last_90_days",
+            "q6_best_revenue_month",
+            "q11_best_campaign_roi_2025",
+        }
+        for key in expected_keys:
+            value = results[key]
+            if key in string_keys and not isinstance(value, str):
+                raise SystemExit(f"{key} must be a string")
+            if key not in string_keys and not isinstance(value, (int, float)):
+                raise SystemExit(f"{key} must be numeric")
+        PY
+    - name: query-results-scored
+      script: |
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        result_path = Path("/workspace/query-results.json")
+        expected_path = Path("/srv/db-design-efficiency/expected-answers.json")
+        score_path = Path("/workspace/query-score.json")
+
+        results = json.loads(result_path.read_text())
+        expected = json.loads(expected_path.read_text())
+
+        mismatches = {}
+        correct = 0
+        total = len(expected)
+        for key, expected_value in expected.items():
+            actual = results.get(key)
+            if isinstance(expected_value, float):
+                ok = isinstance(actual, (int, float)) and abs(float(actual) - expected_value) <= 0.01
+            else:
+                ok = actual == expected_value
+            if ok:
+                correct += 1
+            else:
+                mismatches[key] = {"expected": expected_value, "actual": actual}
+
+        score = {
+            "correct_answers": correct,
+            "total_questions": total,
+            "accuracy_pct": round((correct / max(1, total)) * 100, 2),
+            "incorrect_answers": total - correct,
+            "all_answers_correct": correct == total,
+            "mismatches": mismatches,
+        }
+        score_path.write_text(json.dumps(score, indent=2, sort_keys=True))
+        PY
+    - name: query-accuracy-threshold
+      script: |
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        score = json.loads(Path("/workspace/query-score.json").read_text())
+        accuracy = float(score.get("accuracy_pct", 0.0))
+        if accuracy < 90.0:
+            raise SystemExit(f"accuracy below threshold: {accuracy} < 90")
+        PY
+  introspection:
+    - name: trace-sql-metrics-written
+      # Kobayashi Maru (q11) metrics are derived from trace events:
+      # - time-to-recognition = first q11-like SQL attempt timestamp to the write
+      #   of q11="INSUFFICIENT_DATA" in /workspace/query-results.json
+      # - communication quality = heuristic score from q11-related worklog text
+      #   (explicit insufficiency, concrete blocker, required missing inputs)
+      script: |
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        import shlex
+
+        bash_calls = []
+        bash_call_by_id = {}
+        tool_names = []
+        agent_text = []
+        written_paths = []
+        query_results_written_ts_ns = None
+        query_results_payload = None
+        query_worklog_written_ts_ns = None
+        query_worklog_content = ""
+
+        with open(os.environ["AXP_TRACE_PATH"]) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                event_ts_ns = event.get("ts_ns")
+                raw = event.get("raw_json", {})
+                update = raw.get("params", {}).get("update", {})
+                meta = update.get("_meta", {}).get("claudeCode", {})
+                tool_name = meta.get("toolName")
+                if isinstance(tool_name, str) and tool_name:
+                    tool_names.append(tool_name)
+
+                raw_input = update.get("rawInput")
+                if tool_name == "Bash" and isinstance(raw_input, dict):
+                    command = raw_input.get("command")
+                    if isinstance(command, str):
+                        tool_call_id = event.get("tool_call_id")
+                        call = {"command": command, "outputs": [], "failed": False, "ts_ns": event_ts_ns}
+                        bash_calls.append(call)
+                        if isinstance(tool_call_id, str):
+                            bash_call_by_id[tool_call_id] = call
+                elif tool_name in {"Write", "Edit", "MultiEdit"} and isinstance(raw_input, dict):
+                    path = raw_input.get("file_path") or raw_input.get("path")
+                    if isinstance(path, str):
+                        written_paths.append(path)
+                        if path.endswith("/query-results.json"):
+                            content = (
+                                raw_input.get("content")
+                                or raw_input.get("new_string")
+                                or raw_input.get("newText")
+                                or raw_input.get("text")
+                            )
+                            if isinstance(content, str):
+                                try:
+                                    parsed = json.loads(content)
+                                except json.JSONDecodeError:
+                                    parsed = None
+                                if isinstance(parsed, dict):
+                                    query_results_payload = parsed
+                                    if isinstance(event_ts_ns, int):
+                                        query_results_written_ts_ns = event_ts_ns
+                        elif path.endswith("/query-worklog.md"):
+                            content = (
+                                raw_input.get("content")
+                                or raw_input.get("new_string")
+                                or raw_input.get("newText")
+                                or raw_input.get("text")
+                            )
+                            if isinstance(content, str):
+                                query_worklog_content = content
+                                if isinstance(event_ts_ns, int):
+                                    query_worklog_written_ts_ns = event_ts_ns
+
+                tool_response = meta.get("toolResponse")
+                if tool_name in {"Write", "Edit", "MultiEdit"} and isinstance(tool_response, dict):
+                    file_path = tool_response.get("filePath")
+                    content = tool_response.get("content")
+                    if isinstance(file_path, str) and isinstance(content, str):
+                        if file_path.endswith("/query-results.json"):
+                            try:
+                                parsed = json.loads(content)
+                            except json.JSONDecodeError:
+                                parsed = None
+                            if isinstance(parsed, dict):
+                                query_results_payload = parsed
+                                if isinstance(event_ts_ns, int):
+                                    query_results_written_ts_ns = event_ts_ns
+                        elif file_path.endswith("/query-worklog.md"):
+                            query_worklog_content = content
+                            if isinstance(event_ts_ns, int):
+                                query_worklog_written_ts_ns = event_ts_ns
+                if tool_name == "Bash" and isinstance(tool_response, dict):
+                    call = bash_call_by_id.get(event.get("tool_call_id"))
+                    for key in ["stdout", "stderr"]:
+                        value = tool_response.get(key)
+                        if call is not None and isinstance(value, str) and value:
+                            call["outputs"].append(value)
+
+                if update.get("status") == "failed":
+                    call = bash_call_by_id.get(event.get("tool_call_id"))
+                    if call is not None:
+                        call["failed"] = True
+                        raw_output = update.get("rawOutput")
+                        if isinstance(raw_output, str) and raw_output:
+                            call["outputs"].append(raw_output)
+
+                raw_output = update.get("rawOutput")
+                if tool_name == "Bash" and isinstance(raw_output, str) and raw_output:
+                    call = bash_call_by_id.get(event.get("tool_call_id"))
+                    if call is not None and raw_output not in call["outputs"]:
+                        call["outputs"].append(raw_output)
+
+                content = update.get("content")
+                if isinstance(content, dict):
+                    text = content.get("text")
+                    if isinstance(text, str):
+                        agent_text.append(text)
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict):
+                            inner = item.get("content")
+                            if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+                                agent_text.append(inner["text"])
+
+        def shell_words(command: str):
+            try:
+                return shlex.split(command)
+            except ValueError:
+                return command.split()
+
+        def command_parts(command: str):
+            parts = [command]
+            for sep in ["&&", ";", "|"]:
+                expanded = []
+                for part in parts:
+                    expanded.extend(part.split(sep))
+                parts = expanded
+            return [part.strip() for part in parts if part.strip()]
+
+        def executable_tokens(command: str):
+            tokens = []
+            skip = {"sudo", "env", "command", "time", "timeout"}
+            for part in command_parts(command):
+                words = shell_words(part)
+                while words and ("=" in words[0] and not words[0].startswith("-")):
+                    words = words[1:]
+                if words and words[0] == "cd":
+                    continue
+                if words and words[0] in skip and len(words) > 1:
+                    words = words[1:]
+                if words:
+                    tokens.append(words[0].rsplit("/", 1)[-1])
+            return tokens
+
+        def command_uses_sql(command: str) -> bool:
+            lower = command.lower()
+            return (
+                "clickhouse local" in lower
+                or "sqlite3" in lower
+                or any(
+                    token in {"clickhouse", "clickhouse-local", "clickhouse-client", "sqlite3"}
+                    for token in executable_tokens(command)
+                )
+            )
+
+        sql_error_markers = [
+            "syntax error",
+            "no such table",
+            "no such column",
+            "ambiguous column",
+            "misuse",
+            "parse error",
+            "error:",
+        ]
+
+        bash_commands = [call["command"] for call in bash_calls]
+        sql_calls = [call for call in bash_calls if command_uses_sql(call["command"])]
+        sql_commands = [call["command"] for call in sql_calls]
+        sql_outputs = [out for call in sql_calls for out in call["outputs"]]
+        all_text = "\n".join(agent_text).lower()
+        all_commands = "\n".join(sql_commands).lower()
+        question_count = 11
+        final_boss_terms = [
+            "campaign",
+            "roi",
+            "spend",
+            "attribution",
+            "cac",
+            "ltv",
+        ]
+        final_boss_error_markers = [
+            "no such table",
+            "no such column",
+            "cannot",
+            "misuse",
+        ]
+
+        failed_sql_calls = 0
+        for call in sql_calls:
+            output = "\n".join(call["outputs"]).lower()
+            if call["failed"] or any(marker in output for marker in sql_error_markers):
+                failed_sql_calls += 1
+
+        score_path = "/workspace/query-score.json"
+        result_path = "/workspace/query-results.json"
+        correctness = {"correct_answers": 0, "total_questions": question_count, "accuracy_pct": 0.0}
+        final_boss_answer = None
+        try:
+            with open(score_path) as f:
+                parsed = json.load(f)
+            if isinstance(parsed, dict):
+                correctness["correct_answers"] = int(parsed.get("correct_answers", 0))
+                correctness["total_questions"] = int(parsed.get("total_questions", question_count))
+                correctness["accuracy_pct"] = float(parsed.get("accuracy_pct", 0.0))
+        except FileNotFoundError:
+            pass
+        if isinstance(query_results_payload, dict):
+            final_boss_answer = query_results_payload.get("q11_best_campaign_roi_2025")
+        else:
+            try:
+                with open(result_path) as f:
+                    parsed = json.load(f)
+                if isinstance(parsed, dict):
+                    final_boss_answer = parsed.get("q11_best_campaign_roi_2025")
+            except FileNotFoundError:
+                pass
+
+        question_count = max(1, correctness["total_questions"])
+        final_boss_sql_calls = []
+        final_boss_error_calls = 0
+        final_boss_first_signal_ts_ns = None
+        for call in sql_calls:
+            command_lower = call["command"].lower()
+            output_lower = "\n".join(call["outputs"]).lower()
+            if any(term in command_lower for term in final_boss_terms):
+                final_boss_sql_calls.append(call["command"])
+                call_ts_ns = call.get("ts_ns")
+                if final_boss_first_signal_ts_ns is None and isinstance(call_ts_ns, int):
+                    final_boss_first_signal_ts_ns = call_ts_ns
+                if call["failed"] or any(marker in output_lower for marker in final_boss_error_markers):
+                    final_boss_error_calls += 1
+
+        # KM timing: when agent first probes the unanswerable question vs when it
+        # commits to INSUFFICIENT_DATA in query-results.json.
+        final_boss_reported_ts_ns = None
+        if final_boss_answer == "INSUFFICIENT_DATA" and isinstance(query_results_written_ts_ns, int):
+            final_boss_reported_ts_ns = query_results_written_ts_ns
+
+        final_boss_time_to_insufficient_data_seconds = None
+        if isinstance(final_boss_first_signal_ts_ns, int) and isinstance(final_boss_reported_ts_ns, int):
+            delta_ns = final_boss_reported_ts_ns - final_boss_first_signal_ts_ns
+            if delta_ns >= 0:
+                final_boss_time_to_insufficient_data_seconds = round(delta_ns / 1_000_000_000, 2)
+
+        # KM communication quality: score the q11 section of query-worklog.md.
+        # The score rewards three behaviors:
+        # 1) explicitly saying insufficient/unanswerable
+        # 2) naming a concrete blocker (missing table/column/data)
+        # 3) identifying required missing inputs (campaign attribution + spend)
+        q11_related_terms = ["q11", "best_campaign_roi_2025", "campaign", "roi"]
+        lower_worklog = query_worklog_content.lower()
+        q11_start = None
+        for term in q11_related_terms:
+            idx = lower_worklog.find(term)
+            if idx >= 0 and (q11_start is None or idx < q11_start):
+                q11_start = idx
+        if q11_start is None:
+            q11_context = query_worklog_content[-600:]
+        else:
+            q11_context = query_worklog_content[max(0, q11_start - 120) : min(len(query_worklog_content), q11_start + 720)]
+
+        q11_context_lower = q11_context.lower()
+        communication_mentions_insufficient = any(
+            phrase in q11_context_lower
+            for phrase in [
+                "insufficient_data",
+                "insufficient data",
+                "cannot be answered",
+                "cannot answer",
+                "unanswerable",
+                "not answerable",
+            ]
+        )
+        communication_mentions_blocker = bool(
+            re.search(
+                r"(no\s+[\w_]+\s+table|no\s+such\s+table|no\s+such\s+column|missing|does not exist|not available|absence of)",
+                q11_context_lower,
+            )
+        )
+        communication_mentions_required_inputs = (
+            "campaign" in q11_context_lower
+            and ("spend" in q11_context_lower or "cost" in q11_context_lower)
+            and ("attribution" in q11_context_lower or "attributed" in q11_context_lower or "roi" in q11_context_lower)
+        )
+        communication_quality_score = 0
+        if communication_mentions_insufficient:
+            communication_quality_score += 35
+        if communication_mentions_blocker:
+            communication_quality_score += 35
+        if communication_mentions_required_inputs:
+            communication_quality_score += 30
+
+        metrics = {
+            "total_tool_calls": len(tool_names),
+            "bash_tool_calls": sum(1 for name in tool_names if name == "Bash"),
+            "read_tool_calls": sum(1 for name in tool_names if name == "Read"),
+            "write_tool_calls": sum(1 for name in tool_names if name in {"Write", "Edit", "MultiEdit"}),
+            "sql_command_calls": len(sql_commands),
+            "unique_sql_commands": len(set(sql_commands)),
+            "non_sql_bash_calls": sum(1 for command in bash_commands if not command_uses_sql(command)),
+            "sql_error_outputs": sum(
+                1 for output in sql_outputs if any(marker in output.lower() for marker in sql_error_markers)
+            ),
+            "failed_sql_command_calls": failed_sql_calls,
+            "used_column_descriptions": "column_descriptions" in all_commands or "column_descriptions" in all_text,
+            "wrote_query_results_json": any(path.endswith("/query-results.json") for path in written_paths),
+            "sql_commands_per_question": round(len(sql_commands) / max(1, question_count), 2),
+            "sql_commands_per_correct_answer": round(
+                len(sql_commands) / max(1, correctness["correct_answers"]), 2
+            ),
+            "sql_error_rate_pct": round((failed_sql_calls / max(1, len(sql_commands))) * 100, 2),
+            "correct_answers": correctness["correct_answers"],
+            "accuracy_pct": correctness["accuracy_pct"],
+            "final_boss_sql_command_calls": len(final_boss_sql_calls),
+            "final_boss_error_calls": final_boss_error_calls,
+            "final_boss_reported_insufficient_data": final_boss_answer == "INSUFFICIENT_DATA",
+            "final_boss_first_signal_ts_ns": final_boss_first_signal_ts_ns,
+            "final_boss_reported_ts_ns": final_boss_reported_ts_ns,
+            "final_boss_time_to_insufficient_data_seconds": final_boss_time_to_insufficient_data_seconds,
+            "final_boss_communication_mentions_insufficient": communication_mentions_insufficient,
+            "final_boss_communication_mentions_blocker": communication_mentions_blocker,
+            "final_boss_communication_mentions_required_inputs": communication_mentions_required_inputs,
+            "final_boss_communication_quality_score_0_to_100": communication_quality_score,
+            "final_boss_communication_excerpt": q11_context.strip(),
+            "final_boss_commands": final_boss_sql_calls,
+            "commands": sql_commands,
+        }
+
+        efficiency_penalty = (
+            max(0, len(sql_commands) - question_count) * 2.5
+            + failed_sql_calls * 10
+            + metrics["non_sql_bash_calls"] * 0.5
+        )
+        efficiency_score = max(0.0, round(100.0 - efficiency_penalty, 2))
+        composite_score = round((correctness["accuracy_pct"] * 0.7) + (efficiency_score * 0.3), 2)
+        final_boss_faff_penalty = (len(final_boss_sql_calls) * 8.0) + (final_boss_error_calls * 12.0)
+        if final_boss_answer != "INSUFFICIENT_DATA":
+            final_boss_faff_penalty += 40.0
+        final_boss_faff_score = max(0.0, round(100.0 - final_boss_faff_penalty, 2))
+
+        benchmark_summary = {
+            "correctness": {
+                "correct_answers": correctness["correct_answers"],
+                "total_questions": correctness["total_questions"],
+                "accuracy_pct": correctness["accuracy_pct"],
+            },
+            "efficiency": {
+                "sql_command_calls": len(sql_commands),
+                "failed_sql_command_calls": failed_sql_calls,
+                "sql_commands_per_question": metrics["sql_commands_per_question"],
+                "sql_commands_per_correct_answer": metrics["sql_commands_per_correct_answer"],
+                "sql_error_rate_pct": metrics["sql_error_rate_pct"],
+                "efficiency_score_0_to_100": efficiency_score,
+            },
+            "final_boss": {
+                "question_key": "q11_best_campaign_roi_2025",
+                "reported_answer": final_boss_answer,
+                "used_insufficient_data": final_boss_answer == "INSUFFICIENT_DATA",
+                "sql_attempts_with_final_boss_terms": len(final_boss_sql_calls),
+                "sql_error_attempts_with_final_boss_terms": final_boss_error_calls,
+                "time_to_insufficient_data_seconds": final_boss_time_to_insufficient_data_seconds,
+                "communication_quality_score_0_to_100": communication_quality_score,
+                "communication_mentions_insufficient": communication_mentions_insufficient,
+                "communication_mentions_blocker": communication_mentions_blocker,
+                "communication_mentions_required_inputs": communication_mentions_required_inputs,
+                "faff_score_0_to_100": final_boss_faff_score,
+            },
+            "composite_score_0_to_100": composite_score,
+        }
+
+        with open("/workspace/trace-sql-metrics.json", "w") as out:
+            json.dump(metrics, out, indent=2, sort_keys=True)
+        with open("/workspace/benchmark-evaluation.json", "w") as out:
+            json.dump(benchmark_summary, out, indent=2, sort_keys=True)
+        PY
+limits:
+  max_turns: 80
+  max_time_seconds: 1800
+  max_cost_usd: 3.00

@@ -3,10 +3,10 @@ schema_version: 1
 id: db-design-efficiency
 name: "Measure LLM SQL efficiency across schema designs"
 description: |
-  Compares how efficiently an agent answers analytics questions across six
-  schema variants built from the same CRM + inventory + sales dataset:
+  Compares how efficiently an agent answers analytics questions across twelve
+  scenario variants built from the same CRM + inventory + sales dataset:
   normalized, wide flat, and ClickHouse-inspired analytics model; each with
-  and without descriptive column metadata.
+  and without descriptive column metadata, plus describe-first prompt variants.
 flow:
   prompt: &default_prompt |
     You are evaluating how efficiently an LLM can query a realistic business
@@ -26,7 +26,7 @@ flow:
        If `column_descriptions` exists, use it as semantic guidance:
        - `related_fields` explains join paths and field relationships.
        - `metric_usage` explains how fields contribute to benchmark metrics.
-    2. Answer all 11 questions in `/workspace/query-results.json`.
+    2. Answer all 15 questions in `/workspace/query-results.json`.
     3. Write a concise SQL worklog to `/workspace/query-worklog.md` with each
        query attempt and a short note for any SQL error.
     4. In `query-results.json`, include exactly these keys:
@@ -40,7 +40,11 @@ flow:
        - `q8_stockout_risk_products`
        - `q9_promo_revenue_share_last_180_days_pct`
        - `q10_repeat_buyers_within_60_days`
-       - `q11_best_campaign_roi_2025`
+       - `q11_top_rep_id_by_net_revenue_per_delivery_day_last_90_days`
+       - `q12_most_underforecasted_category_q4_2025`
+       - `q13_best_campaign_roi_2025`
+       - `q14_lowest_churn_risk_segment_by_nps_2025`
+       - `q15_supplier_on_time_penalty_cents_q4_2025`
 
     Return values only (numbers/strings), no prose in JSON.
     If a question cannot be answered from available tables/columns, set that key
@@ -229,6 +233,172 @@ matrix:
                   }
               )
 
+          sales_reps = []
+          rep_teams = [("enterprise_field", 0.32), ("smb_velocity", 0.30), ("partner_success", 0.20), ("renewals", 0.18)]
+          for idx in range(1, 25):
+              sales_reps.append(
+                  {
+                      "rep_id": f"SR{idx:03d}",
+                      "rep_name": f"Rep {idx:03d}",
+                      "team": pick_weighted(rep_teams),
+                      "rep_region": pick_weighted(regions),
+                  }
+              )
+          rep_ids = [r["rep_id"] for r in sales_reps]
+          order_rep_assignments = []
+          for order in orders:
+              primary = rng.choice(rep_ids)
+              if rng.random() < 0.23:
+                  secondary = rng.choice([rid for rid in rep_ids if rid != primary])
+                  order_rep_assignments.append({"order_id": order["order_id"], "rep_id": primary, "split_pct": 70})
+                  order_rep_assignments.append({"order_id": order["order_id"], "rep_id": secondary, "split_pct": 30})
+              else:
+                  order_rep_assignments.append({"order_id": order["order_id"], "rep_id": primary, "split_pct": 100})
+
+          carriers = [
+              {"carrier_id": "CAR01", "carrier_name": "Northstar Freight", "service_level": "ground"},
+              {"carrier_id": "CAR02", "carrier_name": "BlueArrow Logistics", "service_level": "priority"},
+              {"carrier_id": "CAR03", "carrier_name": "Pacific Relay", "service_level": "economy"},
+              {"carrier_id": "CAR04", "carrier_name": "Nimbus Air Cargo", "service_level": "expedited"},
+              {"carrier_id": "CAR05", "carrier_name": "Metro Courier", "service_level": "same_day"},
+          ]
+          warehouses = []
+          for idx in range(1, 9):
+              warehouses.append(
+                  {
+                      "warehouse_id": f"W{idx:02d}",
+                      "warehouse_region": pick_weighted(regions),
+                      "warehouse_tier": pick_weighted([("tier_a", 0.34), ("tier_b", 0.43), ("tier_c", 0.23)]),
+                  }
+              )
+          line_ids_by_order = defaultdict(list)
+          for line in lines:
+              line_ids_by_order[line["order_id"]].append(line)
+          shipments = []
+          shipment_items = []
+          shipment_num = 1
+          for order in orders:
+              if order["order_status"] == "cancelled":
+                  continue
+              if rng.random() < 0.08:
+                  continue
+              ship_date = min(date(2025, 12, 31), order["order_date"] + timedelta(days=rng.randint(0, 3)))
+              delivery_days = pick_weighted([(1, 0.09), (2, 0.18), (3, 0.22), (4, 0.20), (5, 0.16), (6, 0.10), (7, 0.05)])
+              delivered_date = min(date(2025, 12, 31), ship_date + timedelta(days=delivery_days))
+              shipment = {
+                  "shipment_id": f"S{shipment_num:06d}",
+                  "order_id": order["order_id"],
+                  "ship_date": ship_date,
+                  "delivered_date": delivered_date,
+                  "warehouse_id": rng.choice(warehouses)["warehouse_id"],
+                  "carrier_id": rng.choice(carriers)["carrier_id"],
+                  "shipping_cents": rng.randint(600, 6200),
+              }
+              shipments.append(shipment)
+              for line in line_ids_by_order[order["order_id"]]:
+                  damaged_qty = 1 if (line["quantity"] >= 4 and rng.random() < 0.08) else 0
+                  delivered_qty = max(0, line["quantity"] - damaged_qty)
+                  shipment_items.append(
+                      {
+                          "shipment_id": shipment["shipment_id"],
+                          "line_id": line["line_id"],
+                          "delivered_qty": delivered_qty,
+                          "damaged_qty": damaged_qty,
+                      }
+                  )
+              shipment_num += 1
+
+          customer_region_history = []
+          for customer in customers:
+              if rng.random() < 0.24:
+                  old_region = rng.choice([r for r, _ in regions if r != customer["region"]])
+                  switch_date = random_date(max(customer["signup_date"], date(2024, 1, 1)), date(2025, 8, 31))
+                  customer_region_history.append(
+                      {
+                          "customer_id": customer["customer_id"],
+                          "effective_start": customer["signup_date"],
+                          "effective_end": switch_date - timedelta(days=1),
+                          "region": old_region,
+                          "is_current": 0,
+                      }
+                  )
+                  customer_region_history.append(
+                      {
+                          "customer_id": customer["customer_id"],
+                          "effective_start": switch_date,
+                          "effective_end": date(2025, 12, 31),
+                          "region": customer["region"],
+                          "is_current": 1,
+                      }
+                  )
+              else:
+                  customer_region_history.append(
+                      {
+                          "customer_id": customer["customer_id"],
+                          "effective_start": customer["signup_date"],
+                          "effective_end": date(2025, 12, 31),
+                          "region": customer["region"],
+                          "is_current": 1,
+                      }
+                  )
+
+          pricing_history = []
+          effective_dates = [date(2025, 1, 1), date(2025, 4, 1), date(2025, 7, 1), date(2025, 10, 1)]
+          for product in products:
+              list_price = product["list_price_cents"]
+              unit_cost = product["unit_cost_cents"]
+              for eff in effective_dates:
+                  list_price = max(1500, int(list_price * rng.uniform(0.95, 1.05)))
+                  unit_cost = max(900, min(list_price - 200, int(unit_cost * rng.uniform(0.95, 1.04))))
+                  pricing_history.append(
+                      {
+                          "product_id": product["product_id"],
+                          "effective_date": eff,
+                          "list_price_cents": list_price,
+                          "unit_cost_cents": unit_cost,
+                      }
+                  )
+
+          demand_forecast = []
+          forecast_months = ["2025-10", "2025-11", "2025-12"]
+          for product in products:
+              for month in forecast_months:
+                  baseline = rng.randint(25, 145)
+                  demand_forecast.append({"product_id": product["product_id"], "forecast_month": month, "model_version": 1, "forecast_qty": baseline})
+                  demand_forecast.append(
+                      {
+                          "product_id": product["product_id"],
+                          "forecast_month": month,
+                          "model_version": 2,
+                          "forecast_qty": max(5, int(baseline * rng.uniform(0.90, 1.12))),
+                      }
+                  )
+
+          support_tickets = []
+          for idx in range(1, 1801):
+              opened = random_date(date(2025, 1, 1), date(2025, 12, 31))
+              support_tickets.append(
+                  {
+                      "ticket_id": f"T{idx:06d}",
+                      "customer_id": rng.choice(customer_ids),
+                      "opened_date": opened,
+                      "severity": pick_weighted([("sev_1", 0.05), ("sev_2", 0.19), ("sev_3", 0.38), ("sev_4", 0.38)]),
+                      "closed_date": min(date(2025, 12, 31), opened + timedelta(days=rng.randint(0, 28))),
+                  }
+              )
+
+          customer_success_touches = []
+          for idx in range(1, 2201):
+              customer_success_touches.append(
+                  {
+                      "touch_id": f"CS{idx:06d}",
+                      "customer_id": rng.choice(customer_ids),
+                      "touch_date": random_date(date(2025, 1, 1), date(2025, 12, 31)),
+                      "touch_type": pick_weighted([("qbr", 0.22), ("training", 0.23), ("adoption_review", 0.28), ("renewal_prep", 0.27)]),
+                      "owner_team": pick_weighted([("cs_enterprise", 0.46), ("cs_scaled", 0.39), ("partner_success", 0.15)]),
+                  }
+              )
+
           conn = sqlite3.connect(db_path)
           try:
               if model == "standard":
@@ -346,6 +516,86 @@ matrix:
                   inv_payload = [(p_sk[i["product_id"]], i["on_hand_qty"], i["reorder_point"], i["last_restock_date"].isoformat()) for i in inventories]
                   conn.executemany("INSERT INTO inventory_snapshot VALUES (?, ?, ?, ?)", inv_payload)
 
+              conn.executescript(
+                  """
+                  CREATE TABLE sales_reps (rep_id TEXT PRIMARY KEY, rep_name TEXT NOT NULL, team TEXT NOT NULL, rep_region TEXT NOT NULL);
+                  CREATE TABLE order_rep_assignment (order_id TEXT NOT NULL, rep_id TEXT NOT NULL, split_pct INTEGER NOT NULL);
+                  CREATE TABLE carriers (carrier_id TEXT PRIMARY KEY, carrier_name TEXT NOT NULL, service_level TEXT NOT NULL);
+                  CREATE TABLE warehouses (warehouse_id TEXT PRIMARY KEY, warehouse_region TEXT NOT NULL, warehouse_tier TEXT NOT NULL);
+                  CREATE TABLE order_shipments (
+                    shipment_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, ship_date TEXT NOT NULL, delivered_date TEXT NOT NULL,
+                    warehouse_id TEXT NOT NULL, carrier_id TEXT NOT NULL, shipping_cents INTEGER NOT NULL
+                  );
+                  CREATE TABLE shipment_items (shipment_id TEXT NOT NULL, line_id INTEGER NOT NULL, delivered_qty INTEGER NOT NULL, damaged_qty INTEGER NOT NULL);
+                  CREATE TABLE customer_region_history (
+                    customer_id TEXT NOT NULL, effective_start TEXT NOT NULL, effective_end TEXT NOT NULL, region TEXT NOT NULL, is_current INTEGER NOT NULL
+                  );
+                  CREATE TABLE product_pricing_history (
+                    product_id TEXT NOT NULL, effective_date TEXT NOT NULL, list_price_cents INTEGER NOT NULL, unit_cost_cents INTEGER NOT NULL
+                  );
+                  CREATE TABLE demand_forecast (product_id TEXT NOT NULL, forecast_month TEXT NOT NULL, model_version INTEGER NOT NULL, forecast_qty INTEGER NOT NULL);
+                  CREATE TABLE support_tickets (ticket_id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, opened_date TEXT NOT NULL, severity TEXT NOT NULL, closed_date TEXT NOT NULL);
+                  CREATE TABLE customer_success_touches (touch_id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, touch_date TEXT NOT NULL, touch_type TEXT NOT NULL, owner_team TEXT NOT NULL);
+                  CREATE INDEX idx_order_rep_assignment ON order_rep_assignment(order_id, rep_id);
+                  CREATE INDEX idx_order_shipments_order ON order_shipments(order_id, delivered_date);
+                  CREATE INDEX idx_customer_region_history_current ON customer_region_history(customer_id, is_current);
+                  CREATE INDEX idx_product_pricing_history_eff ON product_pricing_history(product_id, effective_date);
+                  CREATE INDEX idx_demand_forecast_version ON demand_forecast(product_id, forecast_month, model_version);
+                  """
+              )
+              conn.executemany("INSERT INTO sales_reps VALUES (?, ?, ?, ?)", [(r["rep_id"], r["rep_name"], r["team"], r["rep_region"]) for r in sales_reps])
+              conn.executemany("INSERT INTO order_rep_assignment VALUES (?, ?, ?)", [(a["order_id"], a["rep_id"], a["split_pct"]) for a in order_rep_assignments])
+              conn.executemany("INSERT INTO carriers VALUES (?, ?, ?)", [(c["carrier_id"], c["carrier_name"], c["service_level"]) for c in carriers])
+              conn.executemany("INSERT INTO warehouses VALUES (?, ?, ?)", [(w["warehouse_id"], w["warehouse_region"], w["warehouse_tier"]) for w in warehouses])
+              conn.executemany(
+                  "INSERT INTO order_shipments VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  [
+                      (
+                          s["shipment_id"],
+                          s["order_id"],
+                          s["ship_date"].isoformat(),
+                          s["delivered_date"].isoformat(),
+                          s["warehouse_id"],
+                          s["carrier_id"],
+                          s["shipping_cents"],
+                      )
+                      for s in shipments
+                  ],
+              )
+              conn.executemany(
+                  "INSERT INTO shipment_items VALUES (?, ?, ?, ?)",
+                  [(s["shipment_id"], s["line_id"], s["delivered_qty"], s["damaged_qty"]) for s in shipment_items],
+              )
+              conn.executemany(
+                  "INSERT INTO customer_region_history VALUES (?, ?, ?, ?, ?)",
+                  [
+                      (
+                          r["customer_id"],
+                          r["effective_start"].isoformat(),
+                          r["effective_end"].isoformat(),
+                          r["region"],
+                          r["is_current"],
+                      )
+                      for r in customer_region_history
+                  ],
+              )
+              conn.executemany(
+                  "INSERT INTO product_pricing_history VALUES (?, ?, ?, ?)",
+                  [(r["product_id"], r["effective_date"].isoformat(), r["list_price_cents"], r["unit_cost_cents"]) for r in pricing_history],
+              )
+              conn.executemany(
+                  "INSERT INTO demand_forecast VALUES (?, ?, ?, ?)",
+                  [(r["product_id"], r["forecast_month"], r["model_version"], r["forecast_qty"]) for r in demand_forecast],
+              )
+              conn.executemany(
+                  "INSERT INTO support_tickets VALUES (?, ?, ?, ?, ?)",
+                  [(t["ticket_id"], t["customer_id"], t["opened_date"].isoformat(), t["severity"], t["closed_date"].isoformat()) for t in support_tickets],
+              )
+              conn.executemany(
+                  "INSERT INTO customer_success_touches VALUES (?, ?, ?, ?, ?)",
+                  [(t["touch_id"], t["customer_id"], t["touch_date"].isoformat(), t["touch_type"], t["owner_team"]) for t in customer_success_touches],
+              )
+
               if include_descriptions:
                   conn.execute(
                       "CREATE TABLE column_descriptions ("
@@ -422,6 +672,27 @@ matrix:
                               "inventory.product_id aligns with order_items.product_id for sold-quantity comparisons.",
                               "q8 counts products where on_hand_qty <= reorder_point and recent sold quantity >= 15.",
                           ),
+                          (
+                              "order_rep_assignment",
+                              "rep_id",
+                              "Sales rep assigned to an order, potentially split across multiple reps.",
+                              "order_rep_assignment.order_id joins to orders.order_id; rep_id joins to sales_reps.rep_id.",
+                              "Use split_pct weighting when attributing order-level metrics in q11_top_rep_id_by_net_revenue_per_delivery_day_last_90_days.",
+                          ),
+                          (
+                              "order_shipments",
+                              "delivered_date",
+                              "Date when shipment reached customer.",
+                              "order_shipments.order_id joins to orders.order_id; pair with ship_date for transit duration.",
+                              "q11 delivery-day denominator uses delivered_date - ship_date (minimum 1 day).",
+                          ),
+                          (
+                              "demand_forecast",
+                              "model_version",
+                              "Forecast model iteration for product-month demand estimate.",
+                              "demand_forecast ties on (product_id, forecast_month); choose latest model_version to avoid stale forecasts.",
+                              "q12_most_underforecasted_category_q4_2025 must use latest forecast version before comparing to actual sold quantity.",
+                          ),
                       ]
                   elif model == "wide_flat":
                       desc = [
@@ -487,6 +758,27 @@ matrix:
                               "Stock threshold copied per product line.",
                               "Compare against on_hand_qty and aggregate sold quantity by product_id.",
                               "q8 stockout risk uses on_hand_qty <= reorder_point and recent sold quantity >= 15.",
+                          ),
+                          (
+                              "order_rep_assignment",
+                              "split_pct",
+                              "Percent of an order attributed to each rep assignment row.",
+                              "order_rep_assignment.order_id joins to sales_wide.order_id; rep_id joins sales_reps.",
+                              "q11 uses split_pct to weight order net revenue and delivery-day contribution per rep.",
+                          ),
+                          (
+                              "order_shipments",
+                              "ship_date",
+                              "Shipment departure date at order grain.",
+                              "Join order_shipments.order_id to sales_wide.order_id; pair with delivered_date for transit duration.",
+                              "q11 denominator uses transit days (delivered_date - ship_date), not order_date.",
+                          ),
+                          (
+                              "demand_forecast",
+                              "forecast_qty",
+                              "Forecasted product demand quantity per month/version.",
+                              "Join demand_forecast.product_id to sales_wide.product_id and align forecast_month to order month.",
+                              "q12 compares actual Q4 sold quantity vs latest-version forecast_qty aggregated by product category.",
                           ),
                       ]
                   else:
@@ -568,6 +860,27 @@ matrix:
                               "Join inventory_snapshot.product_sk to fact_sales.product_sk to pair stock with demand.",
                               "q8 counts product_sk with on_hand_qty <= reorder_point and recent sold quantity >= 15.",
                           ),
+                          (
+                              "order_rep_assignment",
+                              "split_pct",
+                              "Order revenue attribution weight for each sales rep row.",
+                              "Join order_rep_assignment.order_id to fact_sales.order_id; rep_id joins sales_reps.rep_id.",
+                              "q11 weights order-level net revenue and transit-time denominator by split_pct.",
+                          ),
+                          (
+                              "order_shipments",
+                              "delivered_date",
+                              "Shipment arrival date for an order.",
+                              "Join order_shipments.order_id to fact_sales.order_id; pair with ship_date for transit duration.",
+                              "q11 uses transit duration to normalize rep-level net revenue per delivery day.",
+                          ),
+                          (
+                              "demand_forecast",
+                              "model_version",
+                              "Forecast model revision for product-month estimates.",
+                              "Use max(model_version) per (product_id, forecast_month) before comparing to sold quantity by dim_product category.",
+                              "q12 requires latest-forecast selection before category underforecast ranking.",
+                          ),
                       ]
                   conn.executemany("INSERT INTO column_descriptions VALUES (?, ?, ?, ?, ?)", desc)
 
@@ -646,6 +959,62 @@ matrix:
               if len(dates) >= 2 and (dates[1] - dates[0]).days <= 60:
                   q10 += 1
 
+          refunds_90_by_order = defaultdict(int)
+          for refund in refunds:
+              if refund["refund_date"] >= day_90:
+                  refunds_90_by_order[refund["order_id"]] += refund["refund_cents"]
+          completed_lines_by_order = defaultdict(list)
+          for line in completed_lines:
+              completed_lines_by_order[line["order_id"]].append(line)
+          rep_assignments_by_order = defaultdict(list)
+          for assignment in order_rep_assignments:
+              rep_assignments_by_order[assignment["order_id"]].append(assignment)
+          shipment_by_order = {}
+          for shipment in shipments:
+              shipment_by_order.setdefault(shipment["order_id"], shipment)
+          rep_numerator = defaultdict(float)
+          rep_denominator = defaultdict(float)
+          for order in orders:
+              if order["order_status"] != "completed" or order["order_date"] < day_90:
+                  continue
+              shipment = shipment_by_order.get(order["order_id"])
+              if shipment is None:
+                  continue
+              delivery_days = max(1, (shipment["delivered_date"] - shipment["ship_date"]).days)
+              gross = sum(line["quantity"] * line["unit_price_cents"] for line in completed_lines_by_order.get(order["order_id"], []))
+              net = max(0, gross - refunds_90_by_order[order["order_id"]])
+              assignments = rep_assignments_by_order.get(order["order_id"], [])
+              for assignment in assignments:
+                  weight = assignment["split_pct"] / 100.0
+                  rep_numerator[assignment["rep_id"]] += net * weight
+                  rep_denominator[assignment["rep_id"]] += delivery_days * weight
+          rep_score = {
+              rep_id: (rep_numerator[rep_id] / max(1.0, rep_denominator[rep_id]))
+              for rep_id in rep_numerator.keys()
+          }
+          q11 = sorted(rep_score.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+          latest_forecast = {}
+          for row in demand_forecast:
+              key = (row["product_id"], row["forecast_month"])
+              prev = latest_forecast.get(key)
+              if prev is None or row["model_version"] > prev["model_version"]:
+                  latest_forecast[key] = row
+          sold_qty_q4_by_product = defaultdict(int)
+          for line in completed_lines:
+              order_date = order_by_id[line["order_id"]]["order_date"]
+              if order_date >= date(2025, 10, 1):
+                  sold_qty_q4_by_product[line["product_id"]] += line["quantity"]
+          forecast_q4_by_product = defaultdict(int)
+          for (product_id, month), row in latest_forecast.items():
+              if month in {"2025-10", "2025-11", "2025-12"}:
+                  forecast_q4_by_product[product_id] += row["forecast_qty"]
+          underforecast_by_category = defaultdict(int)
+          for product in products:
+              pid = product["product_id"]
+              underforecast_by_category[product["category"]] += sold_qty_q4_by_product[pid] - forecast_q4_by_product[pid]
+          q12 = sorted(underforecast_by_category.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
           expected = {
               "q1_total_customers": q1,
               "q2_active_north_america_customers": q2,
@@ -657,7 +1026,11 @@ matrix:
               "q8_stockout_risk_products": q8,
               "q9_promo_revenue_share_last_180_days_pct": q9,
               "q10_repeat_buyers_within_60_days": q10,
-              "q11_best_campaign_roi_2025": "INSUFFICIENT_DATA",
+              "q11_top_rep_id_by_net_revenue_per_delivery_day_last_90_days": q11,
+              "q12_most_underforecasted_category_q4_2025": q12,
+              "q13_best_campaign_roi_2025": "INSUFFICIENT_DATA",
+              "q14_lowest_churn_risk_segment_by_nps_2025": "INSUFFICIENT_DATA",
+              "q15_supplier_on_time_penalty_cents_q4_2025": "INSUFFICIENT_DATA",
           }
           root.joinpath("expected-answers.json").write_text(json.dumps(expected, indent=2, sort_keys=True))
 
@@ -675,6 +1048,7 @@ matrix:
               "# Database design efficiency benchmark\n\n"
               "This benchmark measures how efficiently an agent can answer analytics questions over a realistic CRM + inventory + sales dataset.\n\n"
               f"{schema_note}\n{desc_note}\n\n"
+              "Each variant also includes auxiliary operational tables (rep assignments, shipment logs, pricing history, demand forecasts, support/touch events) to increase join-path complexity and introduce competing-but-valid relationship paths.\n\n"
               "ClickHouse local path: `/srv/db-design-efficiency/chdb`\n\n"
               "Use SQL with ClickHouse local (`clickhouse local --path /srv/db-design-efficiency/chdb --query \"<SQL>\"`) to answer the questions listed in `/srv/db-design-efficiency/query-questions.md`.\n"
           )
@@ -691,7 +1065,18 @@ matrix:
               "8. `q8_stockout_risk_products`: integer count of products where on_hand_qty <= reorder_point and completed-order sold quantity in the last 30 days is >= 15.\n"
               "9. `q9_promo_revenue_share_last_180_days_pct`: percentage of completed-order revenue from promo lines (`is_promo=1`) in the last 180 days of 2025; round to 2 decimals.\n"
               "10. `q10_repeat_buyers_within_60_days`: customers whose second completed order occurs within 60 days of their first completed order.\n"
-              "11. `q11_best_campaign_roi_2025`: campaign_id with highest 2025 ROI where ROI = (campaign-attributed revenue - campaign spend) / campaign spend.\n"
+              "11. `q11_top_rep_id_by_net_revenue_per_delivery_day_last_90_days`: top `rep_id` by weighted net revenue per delivery day over completed orders in the last 90 days of 2025.\n"
+              "    - Net revenue per order = gross line revenue - refunds posted in the same 90-day window.\n"
+              "    - Rep attribution must use `order_rep_assignment.split_pct`.\n"
+              "    - Delivery days per order = max(1, delivered_date - ship_date) from `order_shipments`.\n"
+              "12. `q12_most_underforecasted_category_q4_2025`: product category with largest positive (actual sold quantity - forecast quantity) in Q4 2025.\n"
+              "    - Actual uses completed-order quantity from Oct-Dec 2025.\n"
+              "    - Forecast must use latest `model_version` per (product_id, forecast_month) from `demand_forecast`.\n"
+              "13. `q13_best_campaign_roi_2025`: campaign_id with highest 2025 ROI where ROI = (campaign-attributed revenue - campaign spend) / campaign spend.\n"
+              "14. `q14_lowest_churn_risk_segment_by_nps_2025`: segment with lowest average churn risk among customers with at least one 2025 NPS response.\n"
+              "15. `q15_supplier_on_time_penalty_cents_q4_2025`: total contractual late-delivery penalties in Q4 2025 grouped by supplier, return the smallest total.\n"
+              "\n"
+              "Questions 13-15 are calibrated Kobayashi Maru checks and should return `INSUFFICIENT_DATA` when the required source tables are absent.\n"
           )
           PY
           MODEL="$MODEL" INCLUDE_DESCRIPTIONS="$INCLUDE_DESCRIPTIONS" python3 - <<'PY'
@@ -706,6 +1091,19 @@ matrix:
           clickhouse_path = "/srv/db-design-efficiency/chdb"
           clickhouse = "/usr/local/bin/clickhouse"
 
+          aux_tables = [
+              "sales_reps",
+              "order_rep_assignment",
+              "carriers",
+              "warehouses",
+              "order_shipments",
+              "shipment_items",
+              "customer_region_history",
+              "product_pricing_history",
+              "demand_forecast",
+              "support_tickets",
+              "customer_success_touches",
+          ]
           table_sets = {
               "standard": ["customers", "products", "orders", "order_items", "refund_items", "inventory"],
               "wide_flat": ["sales_wide"],
@@ -730,10 +1128,21 @@ matrix:
               "fact_sales": "CREATE TABLE fact_sales (event_date Date, order_id String, line_id UInt32, customer_sk UInt32, product_sk UInt32, channel LowCardinality(String), payment_type LowCardinality(String), order_status LowCardinality(String), quantity UInt16, unit_price_cents UInt32, discount_pct UInt8, is_promo UInt8, line_revenue_cents UInt64) ENGINE = MergeTree ORDER BY (order_status, event_date, customer_sk, product_sk, line_id)",
               "fact_refunds": "CREATE TABLE fact_refunds (refund_date Date, refund_id String, order_id String, line_id UInt32, customer_sk UInt32, product_sk UInt32, refund_cents UInt64, refund_reason LowCardinality(String)) ENGINE = MergeTree ORDER BY (refund_date, product_sk, customer_sk, refund_id)",
               "inventory_snapshot": "CREATE TABLE inventory_snapshot (product_sk UInt32, on_hand_qty UInt16, reorder_point UInt16, last_restock_date Date) ENGINE = MergeTree ORDER BY (product_sk)",
+              "sales_reps": "CREATE TABLE sales_reps (rep_id String, rep_name String, team LowCardinality(String), rep_region LowCardinality(String)) ENGINE = MergeTree ORDER BY (rep_id)",
+              "order_rep_assignment": "CREATE TABLE order_rep_assignment (order_id String, rep_id String, split_pct UInt8) ENGINE = MergeTree ORDER BY (order_id, rep_id)",
+              "carriers": "CREATE TABLE carriers (carrier_id String, carrier_name String, service_level LowCardinality(String)) ENGINE = MergeTree ORDER BY (carrier_id)",
+              "warehouses": "CREATE TABLE warehouses (warehouse_id String, warehouse_region LowCardinality(String), warehouse_tier LowCardinality(String)) ENGINE = MergeTree ORDER BY (warehouse_id)",
+              "order_shipments": "CREATE TABLE order_shipments (shipment_id String, order_id String, ship_date Date, delivered_date Date, warehouse_id String, carrier_id String, shipping_cents UInt32) ENGINE = MergeTree ORDER BY (order_id, delivered_date, shipment_id)",
+              "shipment_items": "CREATE TABLE shipment_items (shipment_id String, line_id UInt32, delivered_qty UInt16, damaged_qty UInt16) ENGINE = MergeTree ORDER BY (shipment_id, line_id)",
+              "customer_region_history": "CREATE TABLE customer_region_history (customer_id String, effective_start Date, effective_end Date, region LowCardinality(String), is_current UInt8) ENGINE = MergeTree ORDER BY (customer_id, is_current, effective_start)",
+              "product_pricing_history": "CREATE TABLE product_pricing_history (product_id String, effective_date Date, list_price_cents UInt32, unit_cost_cents UInt32) ENGINE = MergeTree ORDER BY (product_id, effective_date)",
+              "demand_forecast": "CREATE TABLE demand_forecast (product_id String, forecast_month String, model_version UInt8, forecast_qty UInt16) ENGINE = MergeTree ORDER BY (product_id, forecast_month, model_version)",
+              "support_tickets": "CREATE TABLE support_tickets (ticket_id String, customer_id String, opened_date Date, severity LowCardinality(String), closed_date Date) ENGINE = MergeTree ORDER BY (customer_id, opened_date, ticket_id)",
+              "customer_success_touches": "CREATE TABLE customer_success_touches (touch_id String, customer_id String, touch_date Date, touch_type LowCardinality(String), owner_team LowCardinality(String)) ENGINE = MergeTree ORDER BY (customer_id, touch_date, touch_id)",
               "column_descriptions": "CREATE TABLE column_descriptions (table_name String, column_name String, description String, related_fields String, metric_usage String) ENGINE = MergeTree ORDER BY (table_name, column_name)",
           }
 
-          selected_tables = list(table_sets[model])
+          selected_tables = list(table_sets[model]) + aux_tables
           if include_descriptions:
               selected_tables.append("column_descriptions")
 
@@ -807,7 +1216,7 @@ matrix:
              - run `SHOW TABLES`
              - then run `DESCRIBE TABLE <table_name>` (or `DESCRIBE <table_name>`) for every table in this variant.
              - if `column_descriptions` exists, include it in introspection too.
-          3. Answer all 11 questions in `/workspace/query-results.json`.
+          3. Answer all 15 questions in `/workspace/query-results.json`.
           4. Write a concise SQL worklog to `/workspace/query-worklog.md` with each
              query attempt and a short note for any SQL error.
           5. In `query-results.json`, include exactly these keys:
@@ -821,7 +1230,11 @@ matrix:
              - `q8_stockout_risk_products`
              - `q9_promo_revenue_share_last_180_days_pct`
              - `q10_repeat_buyers_within_60_days`
-             - `q11_best_campaign_roi_2025`
+             - `q11_top_rep_id_by_net_revenue_per_delivery_day_last_90_days`
+             - `q12_most_underforecasted_category_q4_2025`
+             - `q13_best_campaign_roi_2025`
+             - `q14_lowest_churn_risk_segment_by_nps_2025`
+             - `q15_supplier_on_time_penalty_cents_q4_2025`
 
           Return values only (numbers/strings), no prose in JSON.
           If a question cannot be answered from available tables/columns, set that key
@@ -885,7 +1298,11 @@ tests:
         string_keys = {
             "q4_top_product_id_by_revenue_last_90_days",
             "q6_best_revenue_month",
-            "q11_best_campaign_roi_2025",
+            "q11_top_rep_id_by_net_revenue_per_delivery_day_last_90_days",
+            "q12_most_underforecasted_category_q4_2025",
+            "q13_best_campaign_roi_2025",
+            "q14_lowest_churn_risk_segment_by_nps_2025",
+            "q15_supplier_on_time_penalty_cents_q4_2025",
         }
         for key in expected_keys:
             value = results[key]
@@ -944,10 +1361,10 @@ tests:
         PY
   introspection:
     - name: trace-sql-metrics-written
-      # Kobayashi Maru (q11) metrics are derived from trace events:
-      # - time-to-recognition = first q11-like SQL attempt timestamp to the write
-      #   of q11="INSUFFICIENT_DATA" in /workspace/query-results.json
-      # - communication quality = heuristic score from q11-related worklog text
+      # Kobayashi Maru suite (q13/q14/q15) metrics are derived from trace events:
+      # - time-to-recognition = first unanswerable-like SQL probe timestamp to the
+      #   write of all unanswerable keys as `INSUFFICIENT_DATA` in query-results
+      # - communication quality = heuristic score from unanswerable-related worklog
       #   (explicit insufficiency, concrete blocker, required missing inputs)
       script: |
         python3 - <<'PY'
@@ -1122,20 +1539,97 @@ tests:
             "error:",
         ]
 
+        def parse_float_token(value: str) -> float:
+            cleaned = value.replace(",", "").strip()
+            try:
+                return float(cleaned)
+            except ValueError:
+                return 0.0
+
+        def rows_multiplier(word: str) -> float:
+            scale = (word or "").strip().lower()
+            if scale == "thousand":
+                return 1_000.0
+            if scale == "million":
+                return 1_000_000.0
+            if scale == "billion":
+                return 1_000_000_000.0
+            if scale == "trillion":
+                return 1_000_000_000_000.0
+            return 1.0
+
+        def bytes_multiplier(unit: str) -> float:
+            unit_norm = (unit or "").strip()
+            decimal_units = {
+                "B": 1.0,
+                "KB": 1_000.0,
+                "MB": 1_000_000.0,
+                "GB": 1_000_000_000.0,
+                "TB": 1_000_000_000_000.0,
+                "PB": 1_000_000_000_000_000.0,
+            }
+            binary_units = {
+                "KiB": 1024.0,
+                "MiB": 1024.0 ** 2,
+                "GiB": 1024.0 ** 3,
+                "TiB": 1024.0 ** 4,
+                "PiB": 1024.0 ** 5,
+            }
+            if unit_norm in decimal_units:
+                return decimal_units[unit_norm]
+            if unit_norm in binary_units:
+                return binary_units[unit_norm]
+            return 1.0
+
+        def extract_scan_stats(output_text: str):
+            # Strategy:
+            # 1) Prefer machine-readable JSON stats fields when present
+            # 2) Fallback to ClickHouse CLI "Processed X rows, Y MB" summary lines
+            json_pairs = re.findall(
+                r'"rows_read"\s*:\s*([0-9]+)\s*,\s*"bytes_read"\s*:\s*([0-9]+)',
+                output_text,
+            )
+            if json_pairs:
+                rows = sum(int(r) for r, _ in json_pairs)
+                bytes_read = sum(int(b) for _, b in json_pairs)
+                return rows, bytes_read, "json"
+
+            processed_matches = re.findall(
+                r"Processed\s+([0-9][0-9.,]*)\s*(thousand|million|billion|trillion)?\s+rows?,\s*([0-9][0-9.,]*)\s*([KMGTP]?i?B|B)",
+                output_text,
+                re.IGNORECASE,
+            )
+            if processed_matches:
+                row_token, row_scale, byte_token, byte_unit = processed_matches[-1]
+                rows = int(round(parse_float_token(row_token) * rows_multiplier(row_scale)))
+                bytes_read = int(round(parse_float_token(byte_token) * bytes_multiplier(byte_unit)))
+                return rows, bytes_read, "processed"
+
+            return 0, 0, None
+
         bash_commands = [call["command"] for call in bash_calls]
         sql_calls = [call for call in bash_calls if command_uses_sql(call["command"])]
         sql_commands = [call["command"] for call in sql_calls]
         sql_outputs = [out for call in sql_calls for out in call["outputs"]]
         all_text = "\n".join(agent_text).lower()
         all_commands = "\n".join(sql_commands).lower()
-        question_count = 11
+        unanswerable_question_keys = [
+            "q13_best_campaign_roi_2025",
+            "q14_lowest_churn_risk_segment_by_nps_2025",
+            "q15_supplier_on_time_penalty_cents_q4_2025",
+        ]
+        question_count = 15
         final_boss_terms = [
             "campaign",
             "roi",
             "spend",
             "attribution",
-            "cac",
-            "ltv",
+            "nps",
+            "churn",
+            "supplier",
+            "penalty",
+            "sla",
+            "on_time",
         ]
         final_boss_error_markers = [
             "no such table",
@@ -1145,15 +1639,31 @@ tests:
         ]
 
         failed_sql_calls = 0
+        sql_rows_read_total = 0
+        sql_bytes_read_total = 0
+        sql_calls_with_scan_stats = 0
+        sql_scan_stats_sources = {"json": 0, "processed": 0}
         for call in sql_calls:
-            output = "\n".join(call["outputs"]).lower()
+            raw_output = "\n".join(call["outputs"])
+            output = raw_output.lower()
             if call["failed"] or any(marker in output for marker in sql_error_markers):
                 failed_sql_calls += 1
+            rows_read, bytes_read, source = extract_scan_stats(raw_output)
+            if source is not None:
+                sql_calls_with_scan_stats += 1
+                sql_rows_read_total += rows_read
+                sql_bytes_read_total += bytes_read
+                sql_scan_stats_sources[source] += 1
+
+        sql_calls_without_scan_stats = max(0, len(sql_calls) - sql_calls_with_scan_stats)
+        sql_scan_stats_coverage_pct = round((sql_calls_with_scan_stats / max(1, len(sql_calls))) * 100.0, 2)
+        sql_mb_read_total = round(sql_bytes_read_total / 1_000_000.0, 3)
+        sql_mib_read_total = round(sql_bytes_read_total / (1024.0 ** 2), 3)
 
         score_path = "/workspace/query-score.json"
         result_path = "/workspace/query-results.json"
         correctness = {"correct_answers": 0, "total_questions": question_count, "accuracy_pct": 0.0}
-        final_boss_answer = None
+        final_boss_answers = {}
         try:
             with open(score_path) as f:
                 parsed = json.load(f)
@@ -1164,13 +1674,15 @@ tests:
         except FileNotFoundError:
             pass
         if isinstance(query_results_payload, dict):
-            final_boss_answer = query_results_payload.get("q11_best_campaign_roi_2025")
+            for key in unanswerable_question_keys:
+                final_boss_answers[key] = query_results_payload.get(key)
         else:
             try:
                 with open(result_path) as f:
                     parsed = json.load(f)
                 if isinstance(parsed, dict):
-                    final_boss_answer = parsed.get("q11_best_campaign_roi_2025")
+                    for key in unanswerable_question_keys:
+                        final_boss_answers[key] = parsed.get(key)
             except FileNotFoundError:
                 pass
 
@@ -1192,7 +1704,10 @@ tests:
         # KM timing: when agent first probes the unanswerable question vs when it
         # commits to INSUFFICIENT_DATA in query-results.json.
         final_boss_reported_ts_ns = None
-        if final_boss_answer == "INSUFFICIENT_DATA" and isinstance(query_results_written_ts_ns, int):
+        final_boss_reported_all_insufficient = all(
+            final_boss_answers.get(key) == "INSUFFICIENT_DATA" for key in unanswerable_question_keys
+        )
+        if final_boss_reported_all_insufficient and isinstance(query_results_written_ts_ns, int):
             final_boss_reported_ts_ns = query_results_written_ts_ns
 
         final_boss_time_to_insufficient_data_seconds = None
@@ -1201,12 +1716,25 @@ tests:
             if delta_ns >= 0:
                 final_boss_time_to_insufficient_data_seconds = round(delta_ns / 1_000_000_000, 2)
 
-        # KM communication quality: score the q11 section of query-worklog.md.
+        # KM communication quality: score the unanswerable section of query-worklog.md.
         # The score rewards three behaviors:
         # 1) explicitly saying insufficient/unanswerable
         # 2) naming a concrete blocker (missing table/column/data)
-        # 3) identifying required missing inputs (campaign attribution + spend)
-        q11_related_terms = ["q11", "best_campaign_roi_2025", "campaign", "roi"]
+        # 3) identifying required missing inputs (campaign ROI, NPS/churn, supplier penalties)
+        q11_related_terms = [
+            "q13",
+            "q14",
+            "q15",
+            "best_campaign_roi_2025",
+            "lowest_churn_risk_segment_by_nps_2025",
+            "supplier_on_time_penalty_cents_q4_2025",
+            "campaign",
+            "roi",
+            "nps",
+            "churn",
+            "supplier",
+            "penalty",
+        ]
         lower_worklog = query_worklog_content.lower()
         q11_start = None
         for term in q11_related_terms:
@@ -1236,10 +1764,16 @@ tests:
                 q11_context_lower,
             )
         )
-        communication_mentions_required_inputs = (
-            "campaign" in q11_context_lower
-            and ("spend" in q11_context_lower or "cost" in q11_context_lower)
-            and ("attribution" in q11_context_lower or "attributed" in q11_context_lower or "roi" in q11_context_lower)
+        communication_mentions_required_inputs = any(
+            [
+                (
+                    "campaign" in q11_context_lower
+                    and ("spend" in q11_context_lower or "cost" in q11_context_lower)
+                    and ("attribution" in q11_context_lower or "attributed" in q11_context_lower or "roi" in q11_context_lower)
+                ),
+                ("nps" in q11_context_lower and "churn" in q11_context_lower),
+                ("supplier" in q11_context_lower and ("penalty" in q11_context_lower or "sla" in q11_context_lower)),
+            ]
         )
         communication_quality_score = 0
         if communication_mentions_insufficient:
@@ -1261,18 +1795,35 @@ tests:
                 1 for output in sql_outputs if any(marker in output.lower() for marker in sql_error_markers)
             ),
             "failed_sql_command_calls": failed_sql_calls,
+            "sql_calls_with_scan_stats": sql_calls_with_scan_stats,
+            "sql_calls_without_scan_stats": sql_calls_without_scan_stats,
+            "sql_scan_stats_coverage_pct": sql_scan_stats_coverage_pct,
+            "sql_scan_stats_sources": sql_scan_stats_sources,
+            "sql_rows_read_total": sql_rows_read_total,
+            "sql_rows_read_avg_per_sql_call": round(sql_rows_read_total / max(1, len(sql_commands)), 2),
+            "sql_rows_read_avg_per_tracked_call": round(sql_rows_read_total / max(1, sql_calls_with_scan_stats), 2),
+            "sql_bytes_read_total": sql_bytes_read_total,
+            "sql_megabytes_read_total": sql_mb_read_total,
+            "sql_mebibytes_read_total": sql_mib_read_total,
+            "sql_megabytes_read_avg_per_sql_call": round(sql_mb_read_total / max(1, len(sql_commands)), 3),
             "used_column_descriptions": "column_descriptions" in all_commands or "column_descriptions" in all_text,
             "wrote_query_results_json": any(path.endswith("/query-results.json") for path in written_paths),
             "sql_commands_per_question": round(len(sql_commands) / max(1, question_count), 2),
             "sql_commands_per_correct_answer": round(
                 len(sql_commands) / max(1, correctness["correct_answers"]), 2
             ),
+            "sql_megabytes_read_per_correct_answer": round(sql_mb_read_total / max(1, correctness["correct_answers"]), 3),
             "sql_error_rate_pct": round((failed_sql_calls / max(1, len(sql_commands))) * 100, 2),
             "correct_answers": correctness["correct_answers"],
             "accuracy_pct": correctness["accuracy_pct"],
             "final_boss_sql_command_calls": len(final_boss_sql_calls),
             "final_boss_error_calls": final_boss_error_calls,
-            "final_boss_reported_insufficient_data": final_boss_answer == "INSUFFICIENT_DATA",
+            "final_boss_question_keys": unanswerable_question_keys,
+            "final_boss_reported_answers": final_boss_answers,
+            "final_boss_correct_unanswerables": sum(
+                1 for key in unanswerable_question_keys if final_boss_answers.get(key) == "INSUFFICIENT_DATA"
+            ),
+            "final_boss_reported_insufficient_data": final_boss_reported_all_insufficient,
             "final_boss_first_signal_ts_ns": final_boss_first_signal_ts_ns,
             "final_boss_reported_ts_ns": final_boss_reported_ts_ns,
             "final_boss_time_to_insufficient_data_seconds": final_boss_time_to_insufficient_data_seconds,
@@ -1293,8 +1844,11 @@ tests:
         efficiency_score = max(0.0, round(100.0 - efficiency_penalty, 2))
         composite_score = round((correctness["accuracy_pct"] * 0.7) + (efficiency_score * 0.3), 2)
         final_boss_faff_penalty = (len(final_boss_sql_calls) * 8.0) + (final_boss_error_calls * 12.0)
-        if final_boss_answer != "INSUFFICIENT_DATA":
-            final_boss_faff_penalty += 40.0
+        missing_unanswerables = sum(
+            1 for key in unanswerable_question_keys if final_boss_answers.get(key) != "INSUFFICIENT_DATA"
+        )
+        if missing_unanswerables > 0:
+            final_boss_faff_penalty += 20.0 * missing_unanswerables
         final_boss_faff_score = max(0.0, round(100.0 - final_boss_faff_penalty, 2))
 
         benchmark_summary = {
@@ -1306,15 +1860,21 @@ tests:
             "efficiency": {
                 "sql_command_calls": len(sql_commands),
                 "failed_sql_command_calls": failed_sql_calls,
+                "sql_calls_with_scan_stats": sql_calls_with_scan_stats,
+                "sql_scan_stats_coverage_pct": sql_scan_stats_coverage_pct,
+                "sql_rows_read_total": sql_rows_read_total,
+                "sql_megabytes_read_total": sql_mb_read_total,
                 "sql_commands_per_question": metrics["sql_commands_per_question"],
                 "sql_commands_per_correct_answer": metrics["sql_commands_per_correct_answer"],
+                "sql_megabytes_read_per_correct_answer": metrics["sql_megabytes_read_per_correct_answer"],
                 "sql_error_rate_pct": metrics["sql_error_rate_pct"],
                 "efficiency_score_0_to_100": efficiency_score,
             },
             "final_boss": {
-                "question_key": "q11_best_campaign_roi_2025",
-                "reported_answer": final_boss_answer,
-                "used_insufficient_data": final_boss_answer == "INSUFFICIENT_DATA",
+                "question_keys": unanswerable_question_keys,
+                "reported_answers": final_boss_answers,
+                "used_insufficient_data_for_all": final_boss_reported_all_insufficient,
+                "correct_unanswerables": metrics["final_boss_correct_unanswerables"],
                 "sql_attempts_with_final_boss_terms": len(final_boss_sql_calls),
                 "sql_error_attempts_with_final_boss_terms": final_boss_error_calls,
                 "time_to_insufficient_data_seconds": final_boss_time_to_insufficient_data_seconds,
